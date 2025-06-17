@@ -6,9 +6,12 @@ The Godot Micro Voxel Engine
 ![image](https://github.com/user-attachments/assets/bf19ee12-9d27-4520-b547-18e7be90d831)
 
 
-
+## Need help? Questions? Discord below:
+https://discord.gg/eJcaEszeRE
 
 ## Its godot, but with tiny voxels.
+
+
 
 ## Free, open source and community-driven
 Just like Godot. But like... Voxels.
