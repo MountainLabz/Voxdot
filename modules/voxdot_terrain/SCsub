@@ -1,1 +1,85 @@
-goo goo ga ga
+# modules/your_voxel_module/SCsub
+
+Import("env") # This imports the default Godot SCons environment
+
+# Define your performance-critical files/directories
+voxel_sources = [
+    #"src/voxel_mesher.cpp",
+    #"src/voxel_data_structure.cpp",
+    "voxdot_terrain.cpp",
+    "MeshConverter.cpp",
+    "register_types.cpp",
+    "mesher.cpp",
+
+    # Add all other source files in your module that need optimization
+    # You can also use glob patterns, e.g., 
+    #"src/*.cpp"
+]
+
+# 1. Clone the existing environment
+# This creates a new environment inheriting settings from the main 'env'
+optimized_env = env.Clone()
+
+# 2. Modify compiler flags for the optimized environment
+# These flags are typically used for release builds.-[]
+# Use appropriate flags for your compiler (GCC/Clang or MSVC)
+if optimized_env["platform"] == "windows":
+    optimized_env.Append(CCFLAGS=[
+        '/O2',               # Maximize speed
+        '/favor:AMD64',      # Target AMD64. Adjust as needed.
+        '/arch:AVX2',        # Enable AVX2. Adjust as needed.
+        '/fp:fast',          # Aggressive floating point.
+        '/GL',               # Whole Program Optimization (LTCG)
+    ])
+    optimized_env.Append(LINKFLAGS=[
+        '/LTCG',             # Link-Time Code Generation
+    ])
+else: # GCC/Clang
+    optimized_env.Append(CCFLAGS=[
+        '-O3',
+        '-ffast-math',
+        '-fno-finite-math-only',
+        '-fomit-frame-pointer',
+        '-march=native',
+        '-mtune=native',
+        '-funroll-loops',
+        '-fprefetch-loop-arrays',
+        '-faggressive-loop-optimizations',
+        '-ftree-vectorize',
+        '-fassociative-math',
+        '-freciprocal-math',
+        '-fipa-pta',
+        '-fipa-cp-clone',
+        '-fpeel-loops',
+        '-fpredictive-commoning',
+        '-frename-registers',
+        '-fivopts',
+        '-flto',
+    ])
+    optimized_env.Append(LINKFLAGS=[
+        '-flto',
+    ])
+
+# You might also want to remove debugging flags if they are highly detrimental
+# Be careful with this, as it can make debugging your voxel module impossible!
+# if optimized_env.Get('debug', False):
+#     optimized_env.Replace(CCFLAGS=[f for f in optimized_env['CCFLAGS'] if f not in ['-g', '/Zi', '/Z7']])
+
+
+# 3. Compile your specific files using the optimized environment
+# Instead of using env.add_source_files directly, you'll compile objects
+# with your optimized_env and then add them to the main build.
+
+# Create object files with the optimized environment
+optimized_objects = []
+for source_file in voxel_sources:
+    # SCons.Script.File creates a SCons File node from a path
+    optimized_objects.append(optimized_env.Object(source_file))
+
+# Add the optimized objects to the main module sources list
+# This ensures these objects are linked into the final editor executable
+env.modules_sources.extend(optimized_objects)
+
+# Continue with any other module-specific files that *don't* need
+# special optimization, using the default 'env'
+# env.add_source_files(env.modules_sources, "other_module_file.cpp")
