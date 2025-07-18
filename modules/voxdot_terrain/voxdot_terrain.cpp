@@ -1,3 +1,10 @@
+// must add a terrain generation flag, so that we can call a function that removes the other terrain meshes to be "generated" and fill it with the current ones
+// to save time generating meshes that don't need to exist or get updated.
+
+// fix the digging bug!
+
+// add the terrain layers / biomes stuff
+
 #include "voxdot_terrain.h"
 #include "MeshConverter.h" // For GodotVoxelMesher and GodotMeshData
 #include "core/math/math_funcs.h" // For Math::abs, Math::min, Math::max, floor, ceil
@@ -66,6 +73,52 @@ VoxdotTerrain::~VoxdotTerrain() {
 }
 
 
+//void VoxdotTerrain::import_palette_png(const String &p_path) {
+//	Ref<Image> palette_image = Image::load_from_file(p_path);
+//
+//	if (palette_image.is_null()) {
+//		OS::get_singleton()->printerr("Failed to load palette image from path: ", p_path);
+//		return;
+//	}
+//
+//	if (palette_image->is_compressed()) {
+//		palette_image->decompress();
+//	}
+//
+//	// MagicaVoxel uses palette indices 1-255, which map to the first 255 colors (at 0-based index 0-254) in the palette.
+//	// We load the first 255 pixels from the image to serve as the colors for materials 1-255.
+//	int colors_to_load = 255;
+//
+//	if (palette_image->get_width() * palette_image->get_height() < colors_to_load) {
+//		OS::get_singleton()->printerr("Palette image does not contain at least 255 colors. Image size: ", palette_image->get_width(), "x", palette_image->get_height());
+//		return;
+//	}
+//
+//	// In Godot 4.x, you no longer need to call lock() or unlock() for get_pixel().
+//	for (int i = 0; i < colors_to_load; ++i) {
+//		// 'i' represents the 0-based palette index (0-254).
+//		// 'material_id' represents the 1-based voxel color index (1-255).
+//		int material_id = i + 1;
+//
+//		int x = i % palette_image->get_width();
+//		int y = i / palette_image->get_width();
+//
+//		Color pixel_color = palette_image->get_pixel(x, y);
+//
+//		// Convert Godot::Color to Godot::Vector4.
+//		Vector4 material_color(pixel_color.r, pixel_color.g, pixel_color.b, pixel_color.a);
+//
+//		// Set the color for the corresponding material ID.
+//		// Color from Pixel 0 -> Material 1
+//		// Color from Pixel 1 -> Material 2
+//		// ...
+//		// Color from Pixel 254 -> Material 255
+//		_voxel_mesher.setMaterialColor(material_id, material_color);
+//	}
+//
+//	OS::get_singleton()->print("Successfully loaded and applied 255 palette colors from: ", p_path);
+//}
+
 void VoxdotTerrain::import_palette_png(const String &p_path) {
 	Ref<Image> palette_image = Image::load_from_file(p_path);
 
@@ -74,37 +127,46 @@ void VoxdotTerrain::import_palette_png(const String &p_path) {
 		return;
 	}
 
-	// Decompress the image if needed to access pixel data
-	// This is still necessary for compressed formats like PNG before accessing pixels.
 	if (palette_image->is_compressed()) {
 		palette_image->decompress();
 	}
 
-	// Assuming a 256-color palette laid out in a 256x1 image.
-	// Adjust width and height based on your actual palette image layout.
-	int expected_total_pixels = 256;
+	// MagicaVoxel uses palette indices 1-255, which map to the first 255 colors (at 0-based index 0-254) in the palette.
+	// We load the first 255 pixels from the image to serve as the colors for materials 1-255.
+	int colors_to_load = 255;
 
-	if (palette_image->get_width() * palette_image->get_height() < expected_total_pixels) {
-		OS::get_singleton()->printerr("Palette image does not contain at least 256 colors. Image size: ", palette_image->get_width(), "x", palette_image->get_height());
+	if (palette_image->get_width() * palette_image->get_height() < colors_to_load) {
+		OS::get_singleton()->printerr("Palette image does not contain at least 255 colors. Image size: ", palette_image->get_width(), "x", palette_image->get_height());
 		return;
 	}
 
 	// In Godot 4.x, you no longer need to call lock() or unlock() for get_pixel().
-	for (int i = 0; i < expected_total_pixels; ++i) {
+	for (int i = 0; i < colors_to_load; ++i) {
+		// 'i' represents the 0-based palette index (0-254).
+		// 'material_id' represents the 1-based voxel color index (1-255).
+		int material_id = i + 1;
+
 		int x = i % palette_image->get_width();
 		int y = i / palette_image->get_width();
 
 		Color pixel_color = palette_image->get_pixel(x, y);
 
-		// Convert Godot::Color to Godot::Vector4. Color stores RGBA as 0-1 floats.
-		Vector4 material_color(pixel_color.r, pixel_color.g, pixel_color.b, pixel_color.a);
+		// **CHANGE MADE HERE: Convert sRGB color from PNG to linear color space.**
+		// This applies the sRGB EOTF (Electro-Optical Transfer Function).
+		Color linear_color = pixel_color.srgb_to_linear();
 
-		// Assuming _voxel_mesher is an instance of GodotVoxelMesher
-		// and is properly initialized within your VoxdotTerrain class.
-		_voxel_mesher.setMaterialColor(i, material_color);
+		// Convert Godot::Color to Godot::Vector4.
+		Vector4 material_color(linear_color.r, linear_color.g, linear_color.b, linear_color.a);
+
+		// Set the color for the corresponding material ID.
+		// Color from Pixel 0 -> Material 1
+		// Color from Pixel 1 -> Material 2
+		// ...
+		// Color from Pixel 254 -> Material 255
+		_voxel_mesher.setMaterialColor(material_id, material_color);
 	}
 
-	OS::get_singleton()->print("Successfully loaded and applied palette from: ", p_path);
+	OS::get_singleton()->print("Successfully loaded and applied 255 palette colors from: ", p_path);
 }
 
 void VoxdotTerrain::init_terrain_system(float initial_voxel_scale, int noise_seed, int pool_size) {
@@ -837,111 +899,13 @@ void VoxdotTerrain::populate_chunk_voxels(
 				for (int z = local_min_z; z <= local_max_z; ++z) {
 					Vector3 worldVoxelPos_scaled = { worldX_pos_scaled, worldY_pos_scaled, (chunk_offset_in_voxels.z + z - pad) * voxel_scale };
 					if (edit_ptr->getSignedDistance(worldVoxelPos_scaled) <= 0.0f) {
-						voxels[z + x_stride + y_stride] = edit_ptr->getMaterial(Vector3(x,y,z));
+						voxels[z + x_stride + y_stride] = edit_ptr->getMaterial(worldVoxelPos_scaled);
 					}
 				}
 			}
 		}
 	}
 }
-
-
-
-//void VoxdotTerrain::populate_chunk_voxels(
-//		std::vector<uint8_t> &voxels,
-//		int cs_p_val,
-//		int cs_p2_val,
-//		int cs_p3_val,
-//		Vector3 chunk_offset_in_voxels,
-//		const Vector<Ref<ISDFEdit>> &sdf_edits,
-//		bool generate_terrain) {
-//	const int pad = 1;
-//	const int N = cs_p_val;
-//
-//	if (voxels.size() != cs_p3_val) {
-//		voxels.resize(cs_p3_val);
-//	}
-//	std::fill(voxels.begin(), voxels.end(), 0);
-//
-//	if (generate_terrain) {
-//		Vector<int> heightMap;
-//		heightMap.resize(N * N);
-//		const float maxHeightGlobal = static_cast<float>(N) * noise_max;
-//		const float baseHeightGlobal = static_cast<float>(N) * noise_base;
-//		const int terrainMaterialType = 1;
-//
-//		for (int z = 0; z < N; ++z) {
-//			for (int x = 0; x < N; ++x) {
-//				float worldX_noise = (chunk_offset_in_voxels.x + (x - pad)) * voxel_scale;
-//				float worldZ_noise = (chunk_offset_in_voxels.z + (z - pad)) * voxel_scale;
-//				float noiseValue = noise->get_noise_2d(worldX_noise, worldZ_noise);
-//				float terrainHeightF = baseHeightGlobal + (noiseValue * maxHeightGlobal * 2.0f);
-//				heightMap.write[x + z * N] = static_cast<int>(Math::floor(terrainHeightF));
-//			}
-//		}
-//
-//		for (int y = 0; y < N; ++y) {
-//			const int worldY_voxel = chunk_offset_in_voxels.y + (y - pad);
-//			const size_t y_stride = static_cast<size_t>(y) * cs_p2_val;
-//			for (int x = 0; x < N; ++x) {
-//				const size_t x_stride = static_cast<size_t>(x) * cs_p_val;
-//				for (int z = 0; z < N; ++z) {
-//					if (worldY_voxel < heightMap[x + z * N]) {
-//						voxels[z + x_stride + y_stride] = terrainMaterialType;
-//					}
-//				}
-//			}
-//		}
-//	}
-//
-//	if (sdf_edits.is_empty()) {
-//		return;
-//	}
-//
-//	const float inv_voxel_scale = 1.0f / voxel_scale;
-//	const Vector3 chunk_offset_f(chunk_offset_in_voxels.x, chunk_offset_in_voxels.y, chunk_offset_in_voxels.z);
-//
-//	for (int i = 0; i < sdf_edits.size(); ++i) {
-//		Ref<ISDFEdit> edit_ptr = sdf_edits[i];
-//		if (edit_ptr.is_null()) {
-//			continue;
-//		}
-//		std::pair<Vector3, Vector3> worldBounds = edit_ptr->getApproximateWorldBounds();
-//		Vector3 localMin_f = (worldBounds.first * inv_voxel_scale) - chunk_offset_f;
-//		Vector3 localMax_f = (worldBounds.second * inv_voxel_scale) - chunk_offset_f;
-//
-//		Vector3 localMin = Vector3(
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::floor(localMin_f.x) - pad)),
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::floor(localMin_f.y) - pad)),
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::floor(localMin_f.z) - pad)));
-//		Vector3 localMax = Vector3(
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::ceil(localMax_f.x) + pad)),
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::ceil(localMax_f.y) + pad)),
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::ceil(localMax_f.z) + pad)));
-//
-//		int local_min_x = static_cast<int>(localMin.x);
-//		int local_min_y = static_cast<int>(localMin.y);
-//		int local_min_z = static_cast<int>(localMin.z);
-//		int local_max_x = static_cast<int>(localMax.x);
-//		int local_max_y = static_cast<int>(localMax.y);
-//		int local_max_z = static_cast<int>(localMax.z);
-//
-//		for (int y = local_min_y; y <= local_max_y; ++y) {
-//			const float worldY_pos_scaled = (chunk_offset_in_voxels.y + y - pad) * voxel_scale;
-//			const size_t y_stride = static_cast<size_t>(y) * cs_p2_val;
-//			for (int x = local_min_x; x <= local_max_x; ++x) {
-//				const float worldX_pos_scaled = (chunk_offset_in_voxels.x + x - pad) * voxel_scale;
-//				const size_t x_stride = static_cast<size_t>(x) * cs_p_val;
-//				for (int z = local_min_z; z <= local_max_z; ++z) {
-//					Vector3 worldVoxelPos_scaled = { worldX_pos_scaled, worldY_pos_scaled, (chunk_offset_in_voxels.z + z - pad) * voxel_scale };
-//					if (edit_ptr->getSignedDistance(worldVoxelPos_scaled) <= 0.0f) {
-//						voxels[z + x_stride + y_stride] = edit_ptr->getMaterial();
-//					}
-//				}
-//			}
-//		}
-//	}
-//}
 
 void VoxdotTerrain::update_chunk_voxels(
 		std::vector<uint8_t> &voxels,
@@ -1008,7 +972,7 @@ void VoxdotTerrain::update_chunk_voxels(
 					};
 
 					if (edit_ptr->getSignedDistance(worldVoxelPos_scaled) <= 0.0f) {
-						voxels[z + x_stride + y_stride] = edit_ptr->getMaterial(Vector3(x, y, z));
+						voxels[z + x_stride + y_stride] = edit_ptr->getMaterial(worldVoxelPos_scaled);
 					}
 				}
 			}
@@ -1021,88 +985,6 @@ void VoxdotTerrain::update_chunk_voxels(
 	// Safely clear the unprocessed list now that the loop is finished.
 	new_sdf_edits.clear();
 }
-
-//void VoxdotTerrain::update_chunk_voxels(
-//	std::vector<uint8_t>& voxels,
-//	int cs_p_val, // Padded chunk size, e.g., 64
-//	int cs_p2_val, // Padded chunk size squared
-//	int cs_p3_val, // Padded chunk size cubed
-//	Vector3 chunk_offset_in_voxels // World-voxel offset for the chunk
-//) {
-//
-//	ChunkMetadata *md = chunk_map.getptr(chunk_offset_in_voxels / Vector3(62, 62, 62));
-//	Vector<Ref<ISDFEdit>> &new_sdf_edits = md->UnprocessedEdits;
-//
-//
-//
-//	const int pad = 1;
-//	const int N = cs_p_val;
-//	const float inv_voxel_scale = 1.0f / voxel_scale; // Use member voxel_scale
-//	const Vector3 chunk_offset_f(chunk_offset_in_voxels.x, chunk_offset_in_voxels.y, chunk_offset_in_voxels.z); // Convert to float Vector3
-//	for (int i = 0; i < new_sdf_edits.size(); ++i) { // Iterate using index for Godot's Vector
-//		Ref<ISDFEdit> edit_ptr = new_sdf_edits[i]; // Get the Ref
-//		if (edit_ptr.is_null()) { // Always check for null when using Ref<T>
-//			continue;
-//		}
-//		//std::ostringstream oss_processing_sdf;
-//		//oss_processing_sdf << "Processing SDF edit " << i << " (Type: " << String(edit_ptr->get_class()).utf8().get_data() << ")"; // Convert Godot String to c_str
-//		//OS::get_singleton()->print(oss_processing_sdf.str().c_str());
-//
-//		std::pair<Vector3, Vector3> worldBounds = edit_ptr->getApproximateWorldBounds();
-//		Vector3 localMin_f = (worldBounds.first * inv_voxel_scale) - chunk_offset_f;
-//		Vector3 localMax_f = (worldBounds.second * inv_voxel_scale) - chunk_offset_f;
-//
-//		// Using std::min and std::max for robust clamping.
-//		Vector3 localMin = Vector3(
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::floor(localMin_f.x) - pad)),
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::floor(localMin_f.y) - pad)),
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::floor(localMin_f.z) - pad)));
-//		Vector3 localMax = Vector3(
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::ceil(localMax_f.x) + pad)),
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::ceil(localMax_f.y) + pad)),
-//				std::max(0.0f, std::min(static_cast<float>(N - 1), Math::ceil(localMax_f.z) + pad)));
-//
-//		// Convert back to int for loop bounds
-//		int local_min_x = static_cast<int>(localMin.x);
-//		int local_min_y = static_cast<int>(localMin.y);
-//		int local_min_z = static_cast<int>(localMin.z);
-//
-//		int local_max_x = static_cast<int>(localMax.x);
-//		int local_max_y = static_cast<int>(localMax.y);
-//		int local_max_z = static_cast<int>(localMax.z);
-//
-//		/*std::ostringstream oss_sdf_bounds;
-//		oss_sdf_bounds << "SDF local bounds for edit " << i << ": Min=(" << local_min_x << "," << local_min_y << "," << local_min_z
-//					   << "), Max=(" << local_max_x << "," << local_max_y << "," << local_max_z << ")";
-//		OS::get_singleton()->print(oss_sdf_bounds.str().c_str());*/
-//
-//		for (int y = local_min_y; y <= local_max_y; ++y) {
-//			const float worldY_pos_scaled = (chunk_offset_in_voxels.y + y - pad) * voxel_scale; // Use member voxel_scale
-//			const size_t y_stride = static_cast<size_t>(y) * cs_p2_val;
-//			for (int x = local_min_x; x <= local_max_x; ++x) {
-//				const float worldX_pos_scaled = (chunk_offset_in_voxels.x + x - pad) * voxel_scale; // Use member voxel_scale
-//				const size_t x_stride = static_cast<size_t>(x) * cs_p_val;
-//				for (int z = local_min_z; z <= local_max_z; ++z) {
-//					Vector3 worldVoxelPos_scaled = {
-//						worldX_pos_scaled,
-//						worldY_pos_scaled,
-//						(chunk_offset_in_voxels.z + z - pad) * voxel_scale // Use member voxel_scale
-//					};
-//
-//					if (edit_ptr->getSignedDistance(worldVoxelPos_scaled) <= 0.0f) {
-//						voxels[z + x_stride + y_stride] = edit_ptr->getMaterial();
-//					}
-//				}
-//			}
-//		}
-//
-//		md->sdfEdits.push_back(edit_ptr);
-//		new_sdf_edits.erase(edit_ptr);
-//
-//	}
-//
-//}
-//
 
 
 void VoxdotTerrain::generate_godot_mesh_for_chunk(GodotMeshData &outGodotMeshData, const Vector3 &chunk_coords, int chunk_size_in_voxels) {

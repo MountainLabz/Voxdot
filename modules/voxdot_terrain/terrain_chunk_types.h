@@ -320,13 +320,6 @@ private:
 			Vector3 instance_translation_godot = Vector3(instance->transform.m30, instance->transform.m32, instance->transform.m31);
 			Vector3 model_size_godot = Vector3(model->size_x, model->size_z, model->size_y); // MagicaVoxel Z is Godot Y
 
-			// For now, assuming no rotation from instance->transform.
-			// If rotations are used in .vox, this section needs proper matrix transformation
-			// to get the correct transformed min/max for each model instance.
-			// As instance.transform is a 4x3 matrix from ogt_vox, if it contains rotation,
-			// you'd typically need to apply it to the model's corners.
-			// For simplicity with just translation in MagicaVoxel, it's min_pos and min_pos + size.
-
 			min_voxel_coord.x = MIN(min_voxel_coord.x, instance_translation_godot.x);
 			min_voxel_coord.y = MIN(min_voxel_coord.y, instance_translation_godot.y);
 			min_voxel_coord.z = MIN(min_voxel_coord.z, instance_translation_godot.z);
@@ -340,7 +333,6 @@ private:
 		_model_min_corner = Vector3(Math::floor(min_voxel_coord.x), Math::floor(min_voxel_coord.y), Math::floor(min_voxel_coord.z));
 		_model_dimensions = Vector3(Math::ceil(max_voxel_coord.x) + 1, Math::ceil(max_voxel_coord.y) + 1, Math::ceil(max_voxel_coord.z) + 1) - _model_min_corner;
 
-		// Ensure dimensions are at least 1 if a model exists
 		if (_model_dimensions.x < 1 && _vox_scene_cache->num_models > 0) {
 			_model_dimensions.x = 1;
 		}
@@ -351,7 +343,6 @@ private:
 			_model_dimensions.z = 1;
 		}
 
-		// Resize the preprocessed voxel array
 		size_t total_voxels = static_cast<size_t>(_model_dimensions.x) * static_cast<size_t>(_model_dimensions.y) * static_cast<size_t>(_model_dimensions.z);
 		_preprocessed_voxels.assign(total_voxels, 0); // Initialize with 0 (empty)
 
@@ -365,26 +356,21 @@ private:
 
 			Vector3 instance_translation_godot = Vector3(instance->transform.m30, instance->transform.m32, instance->transform.m31);
 
-			for (uint32_t z_model = 0; z_model < model->size_z; ++z_model) { // Iterate over model's Z (MagicaVoxel)
-				for (uint32_t y_model = 0; y_model < model->size_y; ++y_model) { // Iterate over model's Y (MagicaVoxel)
-					for (uint32_t x_model = 0; x_model < model->size_x; ++x_model) { // Iterate over model's X (MagicaVoxel)
+			for (uint32_t z_model = 0; z_model < model->size_z; ++z_model) {
+				for (uint32_t y_model = 0; y_model < model->size_y; ++y_model) {
+					for (uint32_t x_model = 0; x_model < model->size_x; ++x_model) {
 						uint8_t color_index = model->voxel_data[x_model + y_model * model->size_x + z_model * model->size_x * model->size_y];
 
-						if (color_index != 0) { // If voxel is not empty (MagicaVoxel color index 0 is typically empty)
-							// Voxel position in MagicaVoxel model space
+						if (color_index != 0) { // If voxel is not empty
 							Vector3 voxel_pos_model_space_magicavoxel = Vector3(x_model, y_model, z_model);
 
-							// Convert to Godot space for position relative to instance origin
 							Vector3 voxel_pos_godot_relative_to_instance_origin = Vector3(
 									voxel_pos_model_space_magicavoxel.x,
 									voxel_pos_model_space_magicavoxel.z, // MagicaVoxel Z is Godot Y
 									voxel_pos_model_space_magicavoxel.y // MagicaVoxel Y is Godot Z
 							);
 
-							// World voxel position relative to scene origin (before _model_min_corner translation)
 							Vector3 world_voxel_pos = instance_translation_godot + voxel_pos_godot_relative_to_instance_origin;
-
-							// Convert to local grid coordinates for _preprocessed_voxels
 							Vector3 grid_pos = world_voxel_pos - _model_min_corner;
 
 							int gx = static_cast<int>(Math::round(grid_pos.x));
@@ -396,15 +382,10 @@ private:
 									gz >= 0 && gz < _model_dimensions.z) {
 								size_t index = gx + static_cast<size_t>(gy) * static_cast<size_t>(_model_dimensions.x) + static_cast<size_t>(gz) * static_cast<size_t>(_model_dimensions.x) * static_cast<size_t>(_model_dimensions.y);
 								if (index < _preprocessed_voxels.size()) {
-									// --- START OF ADDED/MODIFIED CODE ---
-									uint8_t processed_material_id = color_index;
-									// If the material ID is 0, remap it to 1 to ensure it's treated as a solid voxel.
-									// This handles cases where a solid voxel from the .vox file might have a color_index of 0.
-									if (processed_material_id == 0) {
-										processed_material_id = 1;
-									}
-									_preprocessed_voxels[index] = processed_material_id; // Store the processed material/color index
-									// --- END OF ADDED/MODIFIED CODE ---
+									// In MagicaVoxel, palette index 0 is reserved for empty.
+									// The actual colors start at index 1. The ogt_vox color_index
+									// is 1-based for colors. We store it directly.
+									_preprocessed_voxels[index] = color_index;
 								}
 							}
 						}
@@ -420,9 +401,8 @@ public:
 			_vox_scene_cache(nullptr),
 			_are_bounds_cached(false),
 			_is_preprocessed(false),
-			_material(0),
+			_material(1), // Default material to 1
 			_scale(1.0f) {
-		// _file_path, _offset, _model_dimensions, _model_min_corner are default-constructed
 	}
 
 	~SDFVoxEdit() {
@@ -432,7 +412,7 @@ public:
 	void set_file_path(const String &p_path) {
 		if (_file_path != p_path) {
 			_file_path = p_path;
-			_clear_vox_cache(); // Clear cache to force reload and re-preprocess
+			_clear_vox_cache();
 		}
 	}
 	String get_file_path() const {
@@ -441,8 +421,6 @@ public:
 
 	void set_offset(const Vector3 &p_offset) {
 		_offset = p_offset;
-		// Offset change doesn't invalidate internal voxel data or bounds, only world position
-		// so no need to clear _are_bounds_cached or _is_preprocessed
 	}
 	Vector3 get_offset() const {
 		return _offset;
@@ -458,8 +436,8 @@ public:
 	void set_scale(float p_scale) {
 		if (_scale != p_scale) {
 			_scale = p_scale;
-			_are_bounds_cached = false; // Invalidate bounds if scale changes
-			_is_preprocessed = false; // Invalidate preprocessed cache if scale changes
+			_are_bounds_cached = false;
+			_is_preprocessed = false;
 		}
 	}
 	float get_scale() const {
@@ -473,65 +451,62 @@ public:
 
 		Vector3 local_pos = (p_pos - _offset) / _scale;
 
-		// Convert local_pos to voxel coordinates relative to the preprocessed grid's (0,0,0)
 		int vx = static_cast<int>(Math::floor(local_pos.x - _model_min_corner.x));
 		int vy = static_cast<int>(Math::floor(local_pos.y - _model_min_corner.y));
 		int vz = static_cast<int>(Math::floor(local_pos.z - _model_min_corner.z));
 
-		// Explicitly cast _model_dimensions components to int for clamping and index calculation
 		int dim_x_int = static_cast<int>(_model_dimensions.x);
 		int dim_y_int = static_cast<int>(_model_dimensions.y);
 		int dim_z_int = static_cast<int>(_model_dimensions.z);
 
-		// Clamp voxel coordinates to be within the pre-processed model dimensions
-		vx = std::clamp(vx, 0, dim_x_int - 1);
-		vy = std::clamp(vy, 0, dim_y_int - 1);
-		vz = std::clamp(vz, 0, dim_z_int - 1);
+		if (vx < 0 || vx >= dim_x_int || vy < 0 || vy >= dim_y_int || vz < 0 || vz >= dim_z_int) {
+			return 1.0f; // Outside the bounds of the voxel model, so it's air.
+		}
 
 		size_t index = static_cast<size_t>(vx + vy * dim_x_int + vz * dim_x_int * dim_y_int);
 
 		if (index < _preprocessed_voxels.size()) {
-			return _preprocessed_voxels[index] != 0 ? -1.0f : 1.0f; // -1.0f for solid, 1.0f for air
+			return _preprocessed_voxels[index] != 0 ? -1.0f : 1.0f;
 		}
-		return 1.0f; // Outside bounds or invalid index implies air
+		return 1.0f;
 	}
 
 	virtual uint8_t getMaterial(const Vector3 &p_pos) const override {
 		if (!_is_preprocessed) {
-			_preprocess_vox_data(); // This will trigger preprocessing
+			_preprocess_vox_data();
 		}
 
-		// Convert world position to local voxel grid coordinates
 		Vector3 local_pos = (p_pos - _offset) / _scale;
 
-		// Floor to get integer voxel coordinates relative to the preprocessed grid's (0,0,0)
 		int vx = static_cast<int>(Math::floor(local_pos.x - _model_min_corner.x));
 		int vy = static_cast<int>(Math::floor(local_pos.y - _model_min_corner.y));
 		int vz = static_cast<int>(Math::floor(local_pos.z - _model_min_corner.z));
 
-		// Explicitly cast _model_dimensions components to int for clamping and index calculation
 		int dim_x_int = static_cast<int>(_model_dimensions.x);
 		int dim_y_int = static_cast<int>(_model_dimensions.y);
 		int dim_z_int = static_cast<int>(_model_dimensions.z);
 
-		// Clamp coordinates to be within the bounds of the preprocessed array
-		vx = std::clamp(vx, 0, dim_x_int - 1);
-		vy = std::clamp(vy, 0, dim_y_int - 1);
-		vz = std::clamp(vz, 0, dim_z_int - 1);
+		if (vx < 0 || vx >= dim_x_int || vy < 0 || vy >= dim_y_int || vz < 0 || vz >= dim_z_int) {
+			return 0; // Air
+		}
 
-		// Calculate 1D index
 		size_t index = static_cast<size_t>(vx + vy * dim_x_int + vz * dim_x_int * dim_y_int);
 
 		if (index < _preprocessed_voxels.size()) {
-			return _preprocessed_voxels[index];
+			uint8_t mat_index = _preprocessed_voxels[index];
+			// If material is specified in the function call, it means we use single-material mode.
+			// Otherwise, we use the voxel's own material index.
+			if (_material != 0) {
+				return (mat_index != 0) ? _material : 0;
+			}
+			return mat_index;
 		}
-		return _material; // Fallback material if index is problematic (shouldn't happen with clamping)
+		return 0; // Air
 	}
 
 	virtual std::pair<Vector3, Vector3> getApproximateWorldBounds() const override {
-		_calculate_and_cache_local_bounds(); // Ensure bounds are cached
+		_calculate_and_cache_local_bounds();
 
-		// Add the SDFVoxEdit's own offset to the locally cached bounds to get world bounds
 		return { _cached_scene_aabb_min_local + _offset, _cached_scene_aabb_max_local + _offset };
 	}
 
@@ -541,13 +516,12 @@ public:
 		new_edit->set_file_path(_file_path);
 		new_edit->set_offset(_offset);
 		new_edit->set_material(_material);
-		new_edit->set_scale(_scale); // Clone scale as well
+		new_edit->set_scale(_scale);
 		return new_edit;
 	}
 
-
-//protected:
-//	static void _bind_methods();
+	//protected:
+	//	static void _bind_methods();
 };
 
 
