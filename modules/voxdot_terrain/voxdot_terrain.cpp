@@ -61,9 +61,12 @@ VoxdotTerrain::VoxdotTerrain() :
 	if (shared_material.is_null()) {
 		shared_material.instantiate();
 		// Set some sensible defaults if not set by inspector
-		shared_material->set_albedo(Color(1.0, 1.0, 1.0));
-		shared_material->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA_DEPTH_PRE_PASS);
-		shared_material->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+		/*if (shared_material == StandardMaterial3D) {
+			shared_material->set_albedo(Color(1.0, 1.0, 1.0));
+			shared_material->set_transparency(BaseMaterial3D::TRANSPARENCY_ALPHA_DEPTH_PRE_PASS);
+			shared_material->set_flag(BaseMaterial3D::FLAG_ALBEDO_FROM_VERTEX_COLOR, true);
+		}*/
+		
 	}
 }
 
@@ -702,44 +705,113 @@ CollisionShape3D *VoxdotTerrain::create_and_add_collision_shape_child(const Godo
 
 
 // New function implementation
+
+//bool VoxdotTerrain::is_chunk_partially_filled(const Vector3 &chunk_coords, float padding) const {
+//	const int INNER_CHUNK_SIZE = CS; // CS is 62
+//	const int PADDED_CHUNK_SIZE = CS + 2; // 64
+//
+//	// Calculate the world position of the chunk's center for noise sampling
+//	// This is the center of the INNER chunk, not the padded one.
+//	float center_world_x = (chunk_coords.x * INNER_CHUNK_SIZE + INNER_CHUNK_SIZE / 2.0f) * voxel_scale;
+//	float center_world_z = (chunk_coords.z * INNER_CHUNK_SIZE + INNER_CHUNK_SIZE / 2.0f) * voxel_scale;
+//
+//	// Get the terrain height in 'voxel units' (relative to world Y=0, in terms of voxel indices)
+//	// The noise_base and noise_max are assumed to define height in terms of voxel units.
+//	float noise_value = noise->get_noise_2d(center_world_x, center_world_z);
+//	float terrain_height_voxel_units_from_origin = noise_base + (noise_value * noise_max * 2.0f);
+//
+//	// Calculate the chunk's vertical bounds in 'voxel units' (global voxel indices)
+//	// The chunk_coords.y is the chunk index. Each chunk is INNER_CHUNK_SIZE voxels high.
+//	float chunk_bottom_voxel_y = chunk_coords.y * INNER_CHUNK_SIZE;
+//	float chunk_top_voxel_y = (chunk_coords.y + 1) * INNER_CHUNK_SIZE;
+//
+//	// Define a buffer in voxel units. This should be a few voxels to be generous
+//	// and ensure we don't miss terrain due to sampling only the center.
+//	const float GENEROUS_VOXEL_BUFFER = padding; // e.g., 62 voxels
+//
+//	// Check if the terrain height (plus/minus buffer) overlaps with the chunk's vertical voxel bounds.
+//	// If the terrain's highest point (terrain_height + buffer) is below the chunk's bottom, it's air.
+//	if (terrain_height_voxel_units_from_origin + GENEROUS_VOXEL_BUFFER < chunk_bottom_voxel_y) {
+//		return false; // Completely air
+//	}
+//	// If the terrain's lowest point (terrain_height - buffer) is above the chunk's top, it's solid.
+//	else if (terrain_height_voxel_units_from_origin - GENEROUS_VOXEL_BUFFER > chunk_top_voxel_y) {
+//		return false; // Completely solid
+//	}
+//	// Otherwise, the terrain (with buffer) intersects the chunk vertically, so it's partially filled.
+//	else {
+//		return true; // Partially filled
+//	}
+//}
 bool VoxdotTerrain::is_chunk_partially_filled(const Vector3 &chunk_coords, float padding) const {
-	const int INNER_CHUNK_SIZE = CS; // CS is 62
-	const int PADDED_CHUNK_SIZE = CS + 2; // 64
-
-	// Calculate the world position of the chunk's center for noise sampling
-	// This is the center of the INNER chunk, not the padded one.
-	float center_world_x = (chunk_coords.x * INNER_CHUNK_SIZE + INNER_CHUNK_SIZE / 2.0f) * voxel_scale;
-	float center_world_z = (chunk_coords.z * INNER_CHUNK_SIZE + INNER_CHUNK_SIZE / 2.0f) * voxel_scale;
-
-	// Get the terrain height in 'voxel units' (relative to world Y=0, in terms of voxel indices)
-	// The noise_base and noise_max are assumed to define height in terms of voxel units.
-	float noise_value = noise->get_noise_2d(center_world_x, center_world_z);
-	float terrain_height_voxel_units_from_origin = noise_base + (noise_value * noise_max * 2.0f);
-
-	// Calculate the chunk's vertical bounds in 'voxel units' (global voxel indices)
-	// The chunk_coords.y is the chunk index. Each chunk is INNER_CHUNK_SIZE voxels high.
-	float chunk_bottom_voxel_y = chunk_coords.y * INNER_CHUNK_SIZE;
-	float chunk_top_voxel_y = (chunk_coords.y + 1) * INNER_CHUNK_SIZE;
-
-	// Define a buffer in voxel units. This should be a few voxels to be generous
-	// and ensure we don't miss terrain due to sampling only the center.
-	const float GENEROUS_VOXEL_BUFFER = padding; // e.g., 62 voxels
-
-	// Check if the terrain height (plus/minus buffer) overlaps with the chunk's vertical voxel bounds.
-	// If the terrain's highest point (terrain_height + buffer) is below the chunk's bottom, it's air.
-	if (terrain_height_voxel_units_from_origin + GENEROUS_VOXEL_BUFFER < chunk_bottom_voxel_y) {
-		return false; // Completely air
+	if (biomes.is_empty()) {
+		// Fallback: If no biomes, assume chunks should be checked for generation.
+		return true;
 	}
-	// If the terrain's lowest point (terrain_height - buffer) is above the chunk's top, it's solid.
-	else if (terrain_height_voxel_units_from_origin - GENEROUS_VOXEL_BUFFER > chunk_top_voxel_y) {
-		return false; // Completely solid
+
+	float global_max_height = -std::numeric_limits<float>::max();
+	float global_min_height = std::numeric_limits<float>::max();
+	bool has_3d_layers = false;
+
+	// --- 1. Find the theoretical min/max height bounds of the entire world ---
+	for (int i = 0; i < biomes.size(); ++i) {
+		Ref<Biome> biome = biomes[i];
+		if (biome.is_null()) {
+			continue;
+		}
+
+		const Array &layers = biome->get_terrain_layers();
+		for (int j = 0; j < layers.size(); ++j) {
+			Ref<TerrainLayer> layer = layers[j];
+			if (layer.is_null()) {
+				continue;
+			}
+
+			if (layer->get_dimension()) {
+				has_3d_layers = true;
+			} else {
+				// For 2D layers, calculate theoretical min/max based on noise range [-1, 1]
+				const float layer_max_h = layer->get_noise_base() + layer->get_noise_max() * 2.0f;
+				const float layer_min_h = layer->get_noise_base() - layer->get_noise_max() * 2.0f;
+				if (layer_max_h > global_max_height) {
+					global_max_height = layer_max_h;
+				}
+				if (layer_min_h < global_min_height) {
+					global_min_height = layer_min_h;
+				}
+			}
+		}
 	}
-	// Otherwise, the terrain (with buffer) intersects the chunk vertically, so it's partially filled.
-	else {
-		return true; // Partially filled
+
+	// If no 2D layers exist to define bounds, we must generate the chunk to be safe.
+	if (global_max_height == -std::numeric_limits<float>::max()) {
+		return true;
 	}
+
+	// --- 2. Compare chunk's vertical position with global height bounds ---
+	const int INNER_CHUNK_SIZE = CS; // From mesher.h
+	const float chunk_bottom_voxel_y = chunk_coords.y * INNER_CHUNK_SIZE;
+	const float chunk_top_voxel_y = (chunk_coords.y + 1) * INNER_CHUNK_SIZE;
+
+	// Add user-provided padding for a more generous check
+	const float max_h_with_padding = global_max_height + padding;
+	const float min_h_with_padding = global_min_height - padding;
+
+	// If the chunk is entirely above the highest possible 2D terrain...
+	if (chunk_bottom_voxel_y > max_h_with_padding) {
+		// ...it's empty, unless a 3D layer like floating islands could exist.
+		return has_3d_layers;
+	}
+
+	// If the chunk is entirely below the lowest possible 2D terrain...
+	if (chunk_top_voxel_y < min_h_with_padding) {
+		// ...it's solid, unless a 3D layer like caves could exist.
+		return has_3d_layers;
+	}
+
+	// The chunk is within the potential terrain band, so it's considered partially filled.
+	return true;
 }
-
 
 // ----------------------------------------------------------------------------
 // VoxdotTerrain Data Management
@@ -825,37 +897,157 @@ void VoxdotTerrain::populate_chunk_voxels(
 	std::fill(voxels.begin(), voxels.end(), 0);
 
 	if (generate_terrain) {
-		Vector<int> heightMap;
-		heightMap.resize(N * N);
-		// Removed static_cast<float>(N) multiplication here
-		const float maxHeightGlobal = noise_max;
-		const float baseHeightGlobal = noise_base;
-		const int terrainMaterialType = 1;
+		if (biomes.is_empty()) {
+			return;
+		}
 
-		for (int z = 0; z < N; ++z) {
-			for (int x = 0; x < N; ++x) {
-				float worldX_noise = (chunk_offset_in_voxels.x + (x - pad)) * voxel_scale;
-				float worldZ_noise = (chunk_offset_in_voxels.z + (z - pad)) * voxel_scale;
-				// Use the correct method for Godot's FastNoiseLite
-				float noiseValue = noise->get_noise_2d(worldX_noise, worldZ_noise);
-				float terrainHeightF = baseHeightGlobal + (noiseValue * maxHeightGlobal * 2.0f);
-				heightMap.write[x + z * N] = static_cast<int>(Math::floor(terrainHeightF));
+		const int pad = 1;
+		const int N = cs_p_val;
+		const int N2 = cs_p2_val;
+		const float biome_freq_multiplier = 0.05f;
+
+		// --- 1. Biome Selection (Chunk-Center Approximation) ---
+		const float centerX = (chunk_offset_in_voxels.x + (N / 2) - pad) * voxel_scale;
+		const float centerZ = (chunk_offset_in_voxels.z + (N / 2) - pad) * voxel_scale;
+		const float biome_selection_noise = noise->get_noise_2d(centerX * biome_freq_multiplier, centerZ * biome_freq_multiplier);
+		int biome_index = floor((biome_selection_noise * 0.5f + 0.5f) * biomes.size());
+		biome_index = CLAMP(biome_index, 0, biomes.size() - 1);
+
+		const Ref<Biome> biome = biomes[biome_index];
+		if (biome.is_null() || biome->get_terrain_layers().size() == 0) {
+			return;
+		}
+		const Array &layers = biome->get_terrain_layers();
+
+		// --- 2. Pre-compute World Coordinates ---
+		std::vector<float> worldX_array;
+		std::vector<float> worldZ_array;
+		std::vector<float> worldY_array;
+
+		worldX_array.reserve(N);
+		worldZ_array.reserve(N);
+		worldY_array.reserve(N);
+
+		for (int i = 0; i < N; ++i) {
+			worldX_array.push_back((chunk_offset_in_voxels.x + i - pad) * voxel_scale);
+			worldZ_array.push_back((chunk_offset_in_voxels.z + i - pad) * voxel_scale);
+			worldY_array.push_back((chunk_offset_in_voxels.y + i - pad) * voxel_scale);
+		}
+
+		// --- 3. Generate Heightmaps for 2D Layers Only ---
+		std::vector<std::vector<float>> heightmaps;
+		std::vector<int> layer_2d_indices;
+		std::vector<Ref<TerrainLayer>> valid_layers;
+
+		// Separate 2D and 3D layers
+		for (int i = 0; i < layers.size(); ++i) {
+			Ref<TerrainLayer> layer = layers[i];
+			if (layer.is_valid()) {
+				valid_layers.push_back(layer);
+
+				if (!layer->get_dimension()) {
+					// 2D layer - pre-generate heightmap
+					std::vector<float> heightmap;
+					heightmap.reserve(N * N);
+
+					const float noise_base = layer->get_noise_base();
+					const float noise_scale = layer->get_noise_max() * 2.0f;
+
+					for (int x = 0; x < N; ++x) {
+						for (int z = 0; z < N; ++z) {
+							const float noise_val = layer->get_noise()->get_noise_2d(worldX_array[x], worldZ_array[z]);
+							heightmap.push_back(noise_base + (noise_val * noise_scale));
+						}
+					}
+
+					heightmaps.push_back(std::move(heightmap));
+					layer_2d_indices.push_back(valid_layers.size() - 1);
+				} else {
+					// 3D layer - just add empty heightmap as placeholder
+					heightmaps.push_back(std::vector<float>());
+					layer_2d_indices.push_back(-1); // Mark as 3D layer
+				}
 			}
 		}
 
+		// --- 4. Fill Voxels with Optimized Loop ---
 		for (int y = 0; y < N; ++y) {
-			const int worldY_voxel = chunk_offset_in_voxels.y + (y - pad);
-			const size_t y_stride = static_cast<size_t>(y) * cs_p2_val;
+			const float worldY_scaled = worldY_array[y];
+			const size_t y_offset = (size_t)y * N2;
+
 			for (int x = 0; x < N; ++x) {
-				const size_t x_stride = static_cast<size_t>(x) * cs_p_val;
+				const float worldX = worldX_array[x];
+				const size_t xy_offset = y_offset + (size_t)x * N;
+
 				for (int z = 0; z < N; ++z) {
-					if (worldY_voxel < heightMap[x + z * N]) {
-						voxels[z + x_stride + y_stride] = terrainMaterialType;
+					uint8_t final_material = 0;
+
+					// Process layers from top-down (reverse order)
+					for (int layer_idx = valid_layers.size() - 1; layer_idx >= 0; --layer_idx) {
+						const Ref<TerrainLayer> &layer = valid_layers[layer_idx];
+						bool is_solid = false;
+
+						if (layer_2d_indices[layer_idx] >= 0) {
+							// 2D layer - fast heightmap lookup
+							const std::vector<float> &heightmap = heightmaps[layer_idx];
+							if (!heightmap.empty()) {
+								const float height = heightmap[x * N + z];
+								is_solid = (worldY_scaled < height);
+							}
+						} else {
+							// 3D layer - per-voxel calculation
+							const float worldZ = worldZ_array[z];
+							const float noise_val = layer->get_noise()->get_noise_3d(worldX, worldY_scaled, worldZ);
+							const float density = layer->get_noise_base() + noise_val * layer->get_noise_max();
+							is_solid = (density > 0.0f);
+						}
+
+						if (is_solid) {
+							final_material = layer->get_material_type();
+							break; // Early exit
+						}
+					}
+
+					if (final_material != 0) {
+						const size_t index = xy_offset + z;
+						voxels[index] = final_material;
 					}
 				}
 			}
 		}
 	}
+
+
+	//if (generate_terrain) {
+	//	Vector<int> heightMap;
+	//	heightMap.resize(N * N);
+	//	// Removed static_cast<float>(N) multiplication here
+	//	const float maxHeightGlobal = noise_max;
+	//	const float baseHeightGlobal = noise_base;
+	//	const int terrainMaterialType = 1;
+	//	for (int z = 0; z < N; ++z) {
+	//		for (int x = 0; x < N; ++x) {
+	//			float worldX_noise = (chunk_offset_in_voxels.x + (x - pad)) * voxel_scale;
+	//			float worldZ_noise = (chunk_offset_in_voxels.z + (z - pad)) * voxel_scale;
+	//			// Use the correct method for Godot's FastNoiseLite
+	//			float noiseValue = noise->get_noise_2d(worldX_noise, worldZ_noise);
+	//			float terrainHeightF = baseHeightGlobal + (noiseValue * maxHeightGlobal * 2.0f);
+	//			heightMap.write[x + z * N] = static_cast<int>(Math::floor(terrainHeightF));
+	//		}
+	//	}
+	//	for (int y = 0; y < N; ++y) {
+	//		const int worldY_voxel = chunk_offset_in_voxels.y + (y - pad);
+	//		const size_t y_stride = static_cast<size_t>(y) * cs_p2_val;
+	//		for (int x = 0; x < N; ++x) {
+	//			const size_t x_stride = static_cast<size_t>(x) * cs_p_val;
+	//			for (int z = 0; z < N; ++z) {
+	//				if (worldY_voxel < heightMap[x + z * N]) {
+	//					voxels[z + x_stride + y_stride] = terrainMaterialType;
+	//				}
+	//			}
+	//		}
+	//	}
+	//}
 
 	if (sdf_edits.is_empty()) {
 		return;
@@ -1334,11 +1526,11 @@ float VoxdotTerrain::get_voxel_scale() const {
 	return voxel_scale;
 }
 
-void VoxdotTerrain::set_shared_material(Ref<StandardMaterial3D> p_material) {
+void VoxdotTerrain::set_shared_material(Ref<Material> p_material) {
 	shared_material = p_material;
 }
 
-Ref<StandardMaterial3D> VoxdotTerrain::get_shared_material() const {
+Ref<Material> VoxdotTerrain::get_shared_material() const {
 	return shared_material;
 }
 
@@ -1365,6 +1557,66 @@ void VoxdotTerrain::set_noise_base(float p_base) {
 
 float VoxdotTerrain::get_noise_base() const {
 	return noise_base;
+}
+
+
+//// Implementation for set_biomes and get_biomes
+//void VoxdotTerrain::set_biomes(const Array &p_biomes) {
+//	biomes.clear();
+//	for (int i = 0; i < p_biomes.size(); ++i) {
+//		Variant v = p_biomes[i];
+//
+//		// 1) What kind of Variant is this?
+//		Variant::Type t = v.get_type();
+//		String tname = Variant::get_type_name(t);
+//		// 2) If it’s an Object, what’s its class?
+//		Object *obj = (t == Variant::OBJECT ? v : nullptr);
+//		String cname = obj ? obj->get_class() : "<no‑object>";
+//
+//		OS::get_singleton()->printerr(
+//				"set_biomes[%d]: Variant type=%s, class=%s",
+//						i, tname, cname);
+//
+//		// Now try to cast
+//		Ref<Biome> b;
+//		if (obj) {
+//			b = Object::cast_to<Biome>(obj);
+//		}
+//		if (b.is_valid()) {
+//			biomes.push_back(b);
+//		} else {
+//			OS::get_singleton()->printerr(" → FAILED to cast to Biome at index %d", i);
+//		}
+//	}
+//}
+//
+//Array VoxdotTerrain::get_biomes() const {
+//	Array biomes_array;
+//	for (int i = 0; i < biomes.size(); ++i) {
+//		biomes_array.push_back(biomes[i]);
+//	}
+//	return biomes_array;
+//}
+
+void VoxdotTerrain::set_biomes(const Array &p_biomes) {
+	biomes.clear();
+	for (int i = 0; i < p_biomes.size(); ++i) {
+		Variant v = p_biomes[i];
+		if (v.get_type() == Variant::OBJECT && Object::cast_to<Biome>(v)) {
+			biomes.push_back(v);
+		} else {
+			// user clicked + but didn’t assign: give them a default
+			biomes.push_back(memnew(Biome));
+		}
+	}
+}
+
+Array VoxdotTerrain::get_biomes() const {
+	Array out;
+	for (auto &bm : biomes) {
+		out.append(bm);
+	}
+	return out;
 }
 
 
@@ -1397,7 +1649,7 @@ void VoxdotTerrain::_bind_methods() {
 	// Shared Material accessors
 	ClassDB::bind_method(D_METHOD("set_shared_material", "material"), &VoxdotTerrain::set_shared_material);
 	ClassDB::bind_method(D_METHOD("get_shared_material"), &VoxdotTerrain::get_shared_material);
-	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "shared_material", PROPERTY_HINT_RESOURCE_TYPE, "StandardMaterial3D"), "set_shared_material", "get_shared_material");
+	ADD_PROPERTY(PropertyInfo(Variant::OBJECT, "shared_material", PROPERTY_HINT_RESOURCE_TYPE, "Material"), "set_shared_material", "get_shared_material");
 
 	// Noise resource accessors
 	ClassDB::bind_method(D_METHOD("set_noise", "noise"), &VoxdotTerrain::set_noise);
@@ -1411,5 +1663,13 @@ void VoxdotTerrain::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_noise_max", "max"), &VoxdotTerrain::set_noise_max);
 	ClassDB::bind_method(D_METHOD("get_noise_max"), &VoxdotTerrain::get_noise_max);
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "noise_max"), "set_noise_max", "get_noise_max");
+
+	// NEW: World (Biome array) accessors
+	ClassDB::bind_method(D_METHOD("set_biomes", "v"), &VoxdotTerrain::set_biomes);
+	ClassDB::bind_method(D_METHOD("get_biomes"), &VoxdotTerrain::get_biomes);
+	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "biomes", PROPERTY_HINT_ARRAY_TYPE, "Biome"), "set_biomes", "get_biomes");
+
+
+
 	
 }

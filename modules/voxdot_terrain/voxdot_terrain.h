@@ -1,12 +1,3 @@
-//notes
-///We can use std::vector<> for the voxel grid generation no need to use Godot Vectors.
-///
-///Benchmark everything. Benchmark the speeds of the converter, generator,  collision generation
-///
-///
-///
-/// 
-
 #pragma once
 #include <chrono> // Required for std::chrono
 #include <iostream> // For output
@@ -15,7 +6,6 @@
 #include "MeshConverter.h" // For GodotMeshData
 #include "core/math/transform_3d.h" // Required for Transform3D
 #include "mesher.h"
-
 
 #include "scene/3d/mesh_instance_3d.h" // Required for MeshInstance3D
 #include "scene/3d/node_3d.h"
@@ -26,6 +16,9 @@
 #include "scene/3d/physics/collision_shape_3d.h"
 #include "scene/resources/3d/concave_polygon_shape_3d.h"
 #include <modules/noise/fastnoise_lite.h>
+#include "core/object/class_db.h"
+
+#include "world_gen.h"
 
 
 class VoxdotTerrain : public StaticBody3D {
@@ -38,13 +31,11 @@ class VoxdotTerrain : public StaticBody3D {
 	float noise_max;
 	float noise_base;
 
-
-
-
 	Vector<Vector3> dirty_chunks;
 	Vector<MeshInstance3D *> mesh_instance_pool; // Pool for reusable MeshInstance3Ds
 	MeshData m_reuseable_meshdata;
 
+	Vector<Ref<Biome>> biomes;
 
 	GodotVoxelMesher _voxel_mesher;
 
@@ -52,7 +43,12 @@ class VoxdotTerrain : public StaticBody3D {
 	Vector<CollisionShape3D *> collision_shape_pool_free;
 	Vector<CollisionShape3D *> collision_shape_pool_in_use;
 
-	Ref<StandardMaterial3D> shared_material;
+	Ref<Material> shared_material;
+
+private:
+	
+
+
 
 protected:
 	static void _bind_methods();
@@ -137,8 +133,8 @@ public:
 	float get_voxel_scale() const;
 
 	// Accessors for shared_material
-	void set_shared_material(Ref<StandardMaterial3D> p_material);
-	Ref<StandardMaterial3D> get_shared_material() const;
+	void set_shared_material(Ref<Material> p_material);
+	Ref<Material> get_shared_material() const;
 
 	// Accessors for noise resource
 	void set_noise(Ref<FastNoiseLite> p_noise);
@@ -151,5 +147,8 @@ public:
 
 	void set_noise_base(float p_base);
 	float get_noise_base() const;
+
+	void set_biomes(const Array &p_biomes);
+	Array get_biomes() const;
 
 };

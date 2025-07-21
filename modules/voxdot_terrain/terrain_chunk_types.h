@@ -1,9 +1,15 @@
 #ifndef TERRAIN_CHUNK_TYPES_H
 #define TERRAIN_CHUNK_TYPES_H
 
+
+#include <iostream> // Required header for std::cout
+#include <modules/noise/fastnoise_lite.h>
+#include "core/io/file_access.h"
+#include "core/os/os.h"
 #include "core/math/math_funcs.h" // Still useful for other Math functions like abs, floor, ceil
 #include "core/math/vector3.h"
 #include "core/object/ref_counted.h"
+#include "core/io/resource.h"
 #include "core/templates/hash_map.h"
 #include "core/templates/vector.h"
 #include <algorithm> // For std::min and std::max
@@ -154,6 +160,10 @@ private:
 // ----------------------------------------------------------------------------
 // SDF Vox Edit
 // ----------------------------------------------------------------------------
+
+
+
+
 class SDFVoxEdit : public ISDFEdit {
 	GDCLASS(SDFVoxEdit, ISDFEdit);
 
@@ -541,5 +551,12 @@ struct ChunkMetadata {
 	ObjectID collisionShape;
 
 };
+
+
+
+
+
+
+
 
 #endif // TERRAIN_CHUNK_TYPES_H
