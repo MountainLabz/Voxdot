@@ -68,6 +68,14 @@ VoxdotTerrain::VoxdotTerrain() :
 		}*/
 		
 	}
+
+
+	_voxel_type_properties.resize(256); // Resize the Godot Vector
+	for (int i = 0; i < 256; ++i) {
+		Ref<VoxelMaterialProperties> props;
+		props.instantiate(); // Create a new instance of the resource
+		_voxel_type_properties.set(i, props); // Assign it to the Vector element
+	}
 }
 
 VoxdotTerrain::~VoxdotTerrain() {
@@ -1211,6 +1219,7 @@ void VoxdotTerrain::generate_godot_mesh_for_chunk(GodotMeshData &outGodotMeshDat
 	auto gen_start = std::chrono::high_resolution_clock::now();
 	// BUGFIX: Reworked logic to handle fresh and existing chunks correctly.
 	if (md->fresh) {
+		process_structures_for_chunk(chunk_coords);
 		// If it's the first time, populate with base terrain and any edits already in the main list.
 		// A brand new chunk will have an empty sdfEdits list here.
 		populate_chunk_voxels(md->voxels, CS_P_VAL, CS_P2_VAL, CS_P3_VAL, chunk_offset_in_voxels, md->sdfEdits, md->generate_terrain);
@@ -1247,7 +1256,7 @@ void VoxdotTerrain::generate_godot_mesh_for_chunk(GodotMeshData &outGodotMeshDat
 	// You might want to set material colors on the mesher if needed:
 	// mesher.setMaterialColor(1, Vector4(1.0f, 0.0f, 0.0f, 1.0f)); // Example for material type 1
 	auto convert_start = std::chrono::high_resolution_clock::now();
-	_voxel_mesher.convertQuadsToGodotMesh(outGodotMeshData, m_reuseable_meshdata, voxel_scale); // Use member voxel_scale
+	_voxel_mesher.convertQuadsToGodotMesh(outGodotMeshData, m_reuseable_meshdata, voxel_scale, _voxel_type_properties); // Use member voxel_scale
 	auto convert_end = std::chrono::high_resolution_clock::now();
 	std::chrono::duration<double, std::micro> convert_duration_micro = convert_end - convert_start;
 	std::cout << "Converter execution time: " << convert_duration_micro.count() << " us" << "\n";
@@ -1311,17 +1320,131 @@ void VoxdotTerrain::add_edit_wrapper(Vector3 size, Vector3 world_pos, int materi
 	}
 }
 
-void VoxdotTerrain::add_vox_edit_wrapper(String path, Vector3 world_pos, int material) {
-	Ref<SDFVoxEdit> vox_edit;
-	vox_edit.instantiate(); // Godot's way to create a RefCounted object
-	// Set the properties of the SDFVoxEdit instance
-	vox_edit->set_offset(world_pos); // The world position becomes the offset for the voxel model
-	vox_edit->set_material(material); // Set the material for the voxel edit
 
-	// IMPORTANT: Set the path to your .vox file here.
-	// This path should be relative to your Godot project (e.g., "res://path/to/my_model.vox").
-	// Make sure the .vox file exists at this path in your Godot project.
-	vox_edit->set_file_path(path); // Placeholder file path
+void VoxdotTerrain::preload_vox_model(const String &p_key, const String &p_path) {
+	// 1. Prevent overwriting an existing key to avoid mistakes.
+	if (_vox_model_cache.has(p_key)) {
+		OS::get_singleton()->printerr("VoxdotTerrain: A model with key '", p_key, "' is already preloaded.");
+		return;
+	}
+
+	// 2. Perform the one-time processing of the .vox file.
+	Ref<FileAccess> file = FileAccess::open(p_path, FileAccess::READ);
+	if (file.is_null()) {
+		OS::get_singleton()->printerr("preload_vox_model: Failed to open .vox file at path: %s", p_path);
+		return;
+	}
+
+	PackedByteArray buffer = file->get_buffer(file->get_length());
+	const ogt_vox_scene *scene = ogt_vox_read_scene(buffer.ptr(), buffer.size());
+
+	if (!scene) {
+		OS::get_singleton()->printerr("preload_vox_model: Failed to parse .vox scene from file: %s", p_path);
+		return;
+	}
+
+	Ref<SharedVoxData> shared_data;
+	shared_data.instantiate();
+
+	// --- This is the same processing logic from the previous answer ---
+	// It calculates the model's bounds and populates the dense voxel grid.
+	// The result is stored in the `shared_data` object.
+	// (Pasting the full logic here for completeness)
+
+	Vector3 min_voxel_coord = Vector3(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+	Vector3 max_voxel_coord = Vector3(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
+
+	for (uint32_t i = 0; i < scene->num_instances; ++i) {
+		const ogt_vox_instance *instance = &scene->instances[i];
+		const ogt_vox_model *model = scene->models[instance->model_index];
+		if (!model) {
+			continue;
+		}
+
+		Vector3 instance_translation_godot = Vector3(instance->transform.m30, instance->transform.m32, instance->transform.m31);
+		Vector3 model_size_godot = Vector3(model->size_x, model->size_z, model->size_y);
+
+		min_voxel_coord = min_voxel_coord.min(instance_translation_godot);
+		max_voxel_coord = max_voxel_coord.max(instance_translation_godot + model_size_godot);
+	}
+
+	shared_data->min_corner = min_voxel_coord;
+	shared_data->dimensions = max_voxel_coord - min_voxel_coord;
+
+	size_t total_voxels = static_cast<size_t>(shared_data->dimensions.x) * static_cast<size_t>(shared_data->dimensions.y) * static_cast<size_t>(shared_data->dimensions.z);
+	if (total_voxels == 0 && scene->num_models > 0) {
+		// Handle case for single voxel models or other edge cases
+		total_voxels = 1;
+		if (shared_data->dimensions.x == 0) {
+			shared_data->dimensions.x = 1;
+		}
+		if (shared_data->dimensions.y == 0) {
+			shared_data->dimensions.y = 1;
+		}
+		if (shared_data->dimensions.z == 0) {
+			shared_data->dimensions.z = 1;
+		}
+	}
+
+	shared_data->voxels.assign(total_voxels, 0);
+	for (uint32_t i = 0; i < scene->num_instances; ++i) {
+		const ogt_vox_instance *instance = &scene->instances[i];
+		const ogt_vox_model *model = scene->models[instance->model_index];
+		if (!model) {
+			continue;
+		}
+
+		Vector3 instance_translation_godot = Vector3(instance->transform.m30, instance->transform.m32, instance->transform.m31);
+
+		for (uint32_t z = 0; z < model->size_z; ++z) {
+			for (uint32_t y = 0; y < model->size_y; ++y) {
+				for (uint32_t x = 0; x < model->size_x; ++x) {
+					uint32_t model_voxel_index = x + (y * model->size_x) + (z * model->size_x * model->size_y);
+					uint8_t material_index = model->voxel_data[model_voxel_index];
+
+					if (material_index == 0) {
+						continue; // Skip empty voxels
+					}
+
+					// Voxel's position relative to its model's origin, converted to Godot coords
+					Vector3 voxel_pos_in_model_godot = Vector3(x, z, y);
+
+					// Voxel's absolute world position (within the combined model)
+					Vector3 voxel_pos_absolute = instance_translation_godot + voxel_pos_in_model_godot;
+
+					// Position relative to our dense grid's origin
+					Vector3 grid_local_pos = voxel_pos_absolute - shared_data->min_corner;
+
+					int grid_x = static_cast<int>(grid_local_pos.x);
+					int grid_y = static_cast<int>(grid_local_pos.y);
+					int grid_z = static_cast<int>(grid_local_pos.z);
+
+					// Calculate 1D index for our flat std::vector
+					size_t grid_index = grid_x + (grid_y * static_cast<int>(shared_data->dimensions.x)) + (grid_z * static_cast<int>(shared_data->dimensions.x) * static_cast<int>(shared_data->dimensions.y));
+
+					if (grid_index < total_voxels) {
+						shared_data->voxels[grid_index] = material_index;
+					}
+				}
+			}
+		}
+	}
+
+	// --- End of processing logic ---
+
+	ogt_vox_destroy_scene(scene);
+
+	// 3. Store the processed data in the cache with the user-defined key.
+	_vox_model_cache[p_key] = shared_data;
+	OS::get_singleton()->print("Preloaded model '", p_path, "' with key '", p_key, "'.");
+}
+
+void VoxdotTerrain::add_vox_edit_wrapper(String key, Vector3 world_pos, int material) {
+	Ref<SDFVoxEdit> vox_edit;
+	vox_edit.instantiate();
+	vox_edit->set_offset(world_pos);
+	vox_edit->set_material(material);
+	vox_edit->set_model_key(key); // Use the key
 	vox_edit->set_scale(get_voxel_scale());
 
 	add_sdf_edit_at_world_pos(vox_edit, 64);
@@ -1329,8 +1452,19 @@ void VoxdotTerrain::add_vox_edit_wrapper(String path, Vector3 world_pos, int mat
 
 bool VoxdotTerrain::add_sdf_edit_at_world_pos(const Ref<ISDFEdit> &edit, int chunk_size_in_voxels) {
 	if (edit.is_null()) {
-		OS::get_singleton()->printerr("add_sdf_edit_at_world_pos: Provided SDF edit is null.\n");
+		// ...
 		return false;
+	}
+
+	Ref<SDFVoxEdit> vox_edit = edit;
+	if (vox_edit.is_valid()) {
+		String key = vox_edit->get_model_key();
+		if (!_vox_model_cache.has(key)) {
+			OS::get_singleton()->printerr("add_sdf_edit_at_world_pos: The model key '", key, "' has not been preloaded. Call preload_vox_model() first.");
+			return false; // Abort placement
+		}
+		// Link the edit to the cached data.
+		vox_edit->set_shared_data(_vox_model_cache[key]);
 	}
 
 	std::pair<Vector3, Vector3> bounds = edit->getApproximateWorldBounds();
@@ -1455,7 +1589,15 @@ void VoxdotTerrain::recreate_chunk_mesh(const Vector3 &chunk_coords, int chunk_s
 		}
 		mesh_arrays[Mesh::ARRAY_TEX_UV] = uvs;
 	}
-
+	if (!mesh_data.uvs2.empty()) {
+		PackedVector2Array uvs2;
+		for (size_t i = 0; i < mesh_data.uvs2.size(); i += 2) {
+			uvs2.push_back(Vector2(
+					mesh_data.uvs2[i],
+					mesh_data.uvs2[i + 1]));
+		}
+		mesh_arrays[Mesh::ARRAY_TEX_UV2] = uvs2; // Assign to UV2 slot
+	}
 	if (!mesh_data.colors.empty()) {
 		PackedColorArray colors;
 		for (size_t i = 0; i < mesh_data.colors.size(); i += 4) {
@@ -1619,6 +1761,236 @@ Array VoxdotTerrain::get_biomes() const {
 	return out;
 }
 
+// Implement the getter and setter for the entire array
+// Implement the setter (converts Godot Array to internal Godot Vector)
+void VoxdotTerrain::set_voxel_type_properties_array(const Array &p_array) {
+	// Resize internal vector if necessary, but keep it at 256
+	int size_to_copy = MIN(p_array.size(), 256);
+	_voxel_type_properties.resize(256); // Always maintain 256 elements
+
+	for (int i = 0; i < 256; ++i) {
+		if (i < size_to_copy) {
+			// Try to cast the Variant to Ref<VoxelMaterialProperties>
+			Ref<VoxelMaterialProperties> props = p_array[i];
+			if (props.is_valid()) {
+				_voxel_type_properties.set(i, props);
+			} else {
+				// If invalid or wrong type, instantiate a default one
+				Ref<VoxelMaterialProperties> default_props;
+				default_props.instantiate();
+				_voxel_type_properties.set(i, default_props);
+			}
+		} else {
+			// For elements beyond the size of p_array, ensure they are instantiated
+			if (!_voxel_type_properties[i].is_valid()) {
+				Ref<VoxelMaterialProperties> default_props;
+				default_props.instantiate();
+				_voxel_type_properties.set(i, default_props);
+			}
+		}
+	}
+	// You might want to trigger a mesh regeneration if properties change
+}
+
+// Implement the getter (converts internal Godot Vector to Godot Array)
+Array VoxdotTerrain::get_voxel_type_properties_array() const {
+	Array godot_array;
+	godot_array.resize(_voxel_type_properties.size()); // Size matches the internal Vector (256)
+	for (int i = 0; i < _voxel_type_properties.size(); ++i) {
+		godot_array[i] = _voxel_type_properties[i]; // Assign Ref<T> directly
+	}
+	return godot_array;
+}
+
+void VoxdotTerrain::set_global_structures(const Array &structures) {
+	global_structures.clear();
+	for (int i = 0; i < structures.size(); ++i) {
+		Variant v = structures[i];
+		Ref<VoxWorldStructure> tl = v;
+		if (tl.is_valid()) {
+			// user assigned a resource
+			global_structures.push_back(tl);
+		} else {
+			// auto‑instantiate a fresh TerrainLayer
+			Ref<VoxWorldStructure> new_tl = memnew(VoxWorldStructure);
+			global_structures.push_back(new_tl);
+		}
+	}
+}
+
+Array VoxdotTerrain::get_global_structures() const {
+	Array out;
+	for (auto &tl : global_structures) {
+		out.append(tl);
+	}
+	return out;
+}
+
+static uint32_t hash_coords_and_seed(const Vector3 &p_coords, int p_seed) {
+	uint32_t x = static_cast<uint32_t>(p_coords.x);
+	uint32_t y = static_cast<uint32_t>(p_coords.y);
+	uint32_t z = static_cast<uint32_t>(p_coords.z);
+	uint32_t seed = static_cast<uint32_t>(p_seed);
+
+	uint32_t h = seed;
+	h = ((h ^ x) * 0x85ebca6b);
+	h = ((h ^ y) * 0xc2b2ae35);
+	h = ((h ^ z) * 0x27d4eb2d);
+	h ^= h >> 16;
+	h *= 0x85ebca6b;
+	h ^= h >> 13;
+	h *= 0xc2b2ae35;
+	h ^= h >> 16;
+	return h;
+}
+
+void VoxdotTerrain::process_structures_for_chunk(const Vector3 &chunk_coords) {
+	ChunkMetadata *md = chunk_map.getptr(chunk_coords);
+	if (!md) {
+		return;
+	}
+
+	// --- 1. Gather all applicable structures ---
+	Vector<Ref<VoxWorldStructure>> structures_to_check;
+
+	// Add global structures
+	for (int i = 0; i < global_structures.size(); ++i) {
+		Ref<VoxWorldStructure> structure = global_structures[i];
+		if (structure.is_valid()) {
+			structures_to_check.push_back(structure);
+		}
+	}
+
+	// Determine biome and add biome-specific structures
+	const int inner_chunk_size = CS;
+	const Vector3 chunk_center_world_pos = (chunk_coords * inner_chunk_size + Vector3(inner_chunk_size / 2.0f, inner_chunk_size / 2.0f, inner_chunk_size / 2.0f)) * voxel_scale;
+
+	if (!biomes.is_empty()) {
+		const float biome_freq_multiplier = 0.05f; // Same as in populate_chunk_voxels
+		const float biome_selection_noise = noise->get_noise_2d(chunk_center_world_pos.x * biome_freq_multiplier, chunk_center_world_pos.z * biome_freq_multiplier);
+		int biome_index = floor((biome_selection_noise * 0.5f + 0.5f) * biomes.size());
+		biome_index = CLAMP(biome_index, 0, biomes.size() - 1);
+		Ref<Biome> biome = biomes[biome_index];
+
+		if (biome.is_valid()) {
+			Array biome_structures = biome->get_structures();
+			for (int i = 0; i < biome_structures.size(); ++i) {
+				Ref<VoxWorldStructure> structure = biome_structures[i];
+				if (structure.is_valid()) {
+					structures_to_check.push_back(structure);
+				}
+			}
+		}
+	}
+
+	// --- 2. Iterate through structures and check for placement ---
+	for (const Ref<VoxWorldStructure> &structure : structures_to_check) {
+		Vector3 spawn_pos;
+		bool should_attempt_spawn = false;
+
+		if (structure->get_spawn_type() == VoxWorldStructure::SPAWN_ONCE) {
+			const float chunk_world_size = inner_chunk_size * voxel_scale;
+			if (chunk_world_size <= 0.0f) {
+				continue;
+			}
+			Vector3 target_chunk_coords = (structure->get_spawn_position() / chunk_world_size).floor();
+			if (target_chunk_coords == chunk_coords) {
+				spawn_pos = structure->get_spawn_position();
+				should_attempt_spawn = true;
+			}
+		} else { // SPAWN_RANDOM
+			uint32_t hash_val = hash_coords_and_seed(chunk_coords, structure->get_random_seed());
+			float random_chance = (hash_val & 0xFFFFFF) / 16777215.0f; // Use 24 bits for a float 0-1
+
+			if (random_chance < structure->get_spawn_frequency()) {
+				uint32_t pos_hash = hash_coords_and_seed(chunk_coords, structure->get_random_seed() + 1);
+				float off_x = ((pos_hash >> 0) & 0xFF) / 255.0f * inner_chunk_size * voxel_scale;
+				float off_y = ((pos_hash >> 8) & 0xFF) / 255.0f * inner_chunk_size * voxel_scale;
+				float off_z = ((pos_hash >> 16) & 0xFF) / 255.0f * inner_chunk_size * voxel_scale;
+
+				spawn_pos = (chunk_coords * inner_chunk_size * voxel_scale) + Vector3(off_x, off_y, off_z);
+				should_attempt_spawn = true;
+			}
+		}
+
+		if (should_attempt_spawn) {
+			// --- 3. Finalize spawn position with alignment and offset ---
+			if (structure->get_ground_aligned()) {
+				spawn_pos.y = get_surface_height_at(spawn_pos.x, spawn_pos.z);
+			}
+			spawn_pos += structure->get_position_offset();
+
+			// --- 4. Perform spawn condition checks ---
+			if (spawn_pos.y < structure->get_min_altitude() || spawn_pos.y > structure->get_max_altitude()) {
+				continue;
+			}
+
+			Ref<FastNoiseLite> noise_check = structure->get_noise_layer();
+			if (noise_check.is_valid()) {
+				float noise_val = noise_check->get_noise_3d(spawn_pos.x, spawn_pos.y, spawn_pos.z);
+				if (noise_val < structure->get_required_noise_value_min() || noise_val > structure->get_required_noise_value_max()) {
+					continue;
+				}
+			}
+
+			// --- 5. All checks passed, create and add the edit ---
+			Ref<SDFVoxEdit> vox_edit;
+			vox_edit.instantiate();
+			vox_edit->set_offset(spawn_pos);
+			vox_edit->set_material(0); // 0 = Use material from .vox file
+			vox_edit->set_model_key(structure->get_model_key());
+			vox_edit->set_scale(voxel_scale);
+
+			add_sdf_edit_at_world_pos(vox_edit, CS + 2);
+		}
+	}
+}
+
+float VoxdotTerrain::get_surface_height_at(float world_x, float world_z) const {
+	if (biomes.is_empty()) {
+		return 0.f; // Cannot determine height without biomes/layers
+	}
+
+	// Determine Biome at the given world coordinates
+	const float biome_freq_multiplier = 0.05f;
+	const float biome_selection_noise = noise->get_noise_2d(world_x * biome_freq_multiplier, world_z * biome_freq_multiplier);
+	int biome_index = floor((biome_selection_noise * 0.5f + 0.5f) * biomes.size());
+	biome_index = CLAMP(biome_index, 0, biomes.size() - 1);
+	const Ref<Biome> biome = biomes[biome_index];
+
+	if (biome.is_null() || biome->get_terrain_layers().is_empty()) {
+		return 0.0f;
+	}
+
+	const Array &layers = biome->get_terrain_layers();
+
+	// To properly find the surface, we must check layers from top to bottom, just like in populate_chunk_voxels.
+	// The code iterates layers backwards (which is assumed to be top-down).
+	for (int i = layers.size() - 1; i >= 0; --i) {
+		Ref<TerrainLayer> layer = layers[i];
+		if (layer.is_valid()) {
+			// We only care about 2D layers for a definitive surface height.
+			if (!layer->get_dimension()) {
+				const float noise_base = layer->get_noise_base();
+				const float noise_scale = layer->get_noise_max() * 2.0f;
+				const float noise_val = layer->get_noise()->get_noise_2d(world_x, world_z);
+				// This height is assumed to be in world units, matching the terrain generation logic.
+				const float height = noise_base + (noise_val * noise_scale);
+
+				// Assuming this layer is opaque and replaces whatever is below, this is our surface height.
+				return height;
+			}
+			// If the top layer is 3D (e.g., floating islands), ground alignment is ambiguous.
+			// We will continue searching downwards for the first 2D layer to act as the "ground".
+		}
+	}
+
+	return 0.0f; // No 2D layers found to align to.
+}
+
+
+
+
 
 void VoxdotTerrain::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("import_palette_png", "path"), &VoxdotTerrain::import_palette_png);
@@ -1639,7 +2011,8 @@ void VoxdotTerrain::_bind_methods() {
 
 	// SDF edit application
 	ClassDB::bind_method(D_METHOD("place_edit", "size", "world_pos", "material", "shape"), &VoxdotTerrain::add_edit_wrapper);
-	ClassDB::bind_method(D_METHOD("place_vox_edit", "path", "world_pos", "material"), &VoxdotTerrain::add_vox_edit_wrapper);
+	ClassDB::bind_method(D_METHOD("place_vox_edit", "key", "world_pos", "material"), &VoxdotTerrain::add_vox_edit_wrapper);
+	ClassDB::bind_method(D_METHOD("preload_vox_model", "key", "path"), &VoxdotTerrain::preload_vox_model);
 
 	// Voxel scale accessors
 	ClassDB::bind_method(D_METHOD("set_voxel_scale", "scale"), &VoxdotTerrain::set_voxel_scale);
@@ -1664,10 +2037,20 @@ void VoxdotTerrain::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("get_noise_max"), &VoxdotTerrain::get_noise_max);
 	ADD_PROPERTY(PropertyInfo(Variant::FLOAT, "noise_max"), "set_noise_max", "get_noise_max");
 
+	ClassDB::bind_method(D_METHOD("get_surface_height_at", "world_x", "world_z"), &VoxdotTerrain::get_surface_height_at);
+
 	// NEW: World (Biome array) accessors
 	ClassDB::bind_method(D_METHOD("set_biomes", "v"), &VoxdotTerrain::set_biomes);
 	ClassDB::bind_method(D_METHOD("get_biomes"), &VoxdotTerrain::get_biomes);
 	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "biomes", PROPERTY_HINT_ARRAY_TYPE, "Biome"), "set_biomes", "get_biomes");
+
+	ClassDB::bind_method(D_METHOD("set_voxel_type_properties_array", "properties"), &VoxdotTerrain::set_voxel_type_properties_array);
+	ClassDB::bind_method(D_METHOD("get_voxel_type_properties_array"), &VoxdotTerrain::get_voxel_type_properties_array);
+	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "voxel_type_properties_array", PROPERTY_HINT_ARRAY_TYPE, "VoxelMaterialProperties"), "set_voxel_type_properties_array", "get_voxel_type_properties_array");
+
+	ClassDB::bind_method(D_METHOD("set_global_structures", "structures"), &VoxdotTerrain::set_global_structures);
+	ClassDB::bind_method(D_METHOD("get_global_structures"), &VoxdotTerrain::get_global_structures);
+	ADD_PROPERTY(PropertyInfo(Variant::ARRAY, "global_structures", PROPERTY_HINT_ARRAY_TYPE, "VoxWorldStructure"), "set_global_structures", "get_global_structures");
 
 
 

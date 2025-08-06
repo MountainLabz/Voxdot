@@ -17,8 +17,11 @@
 #include "scene/resources/3d/concave_polygon_shape_3d.h"
 #include <modules/noise/fastnoise_lite.h>
 #include "core/object/class_db.h"
+#include <array> 
 
 #include "world_gen.h"
+#include "core/templates/vector.h"  // For Godot's Vector<T>
+#include "voxel_material_properties.h" // For VoxelMaterialProperties class"
 
 
 class VoxdotTerrain : public StaticBody3D {
@@ -31,11 +34,15 @@ class VoxdotTerrain : public StaticBody3D {
 	float noise_max;
 	float noise_base;
 
+	HashMap<String, Ref<SharedVoxData>> _vox_model_cache;
+
+
 	Vector<Vector3> dirty_chunks;
 	Vector<MeshInstance3D *> mesh_instance_pool; // Pool for reusable MeshInstance3Ds
 	MeshData m_reuseable_meshdata;
 
 	Vector<Ref<Biome>> biomes;
+	Vector<Ref<VoxWorldStructure>> global_structures;
 
 	GodotVoxelMesher _voxel_mesher;
 
@@ -44,10 +51,16 @@ class VoxdotTerrain : public StaticBody3D {
 	Vector<CollisionShape3D *> collision_shape_pool_in_use;
 
 	Ref<Material> shared_material;
-
-private:
+	// Array to store material properties for each of the 256 voxel types
+	// Using std::array for fixed size 256, assuming voxel type ID is 0-255
+	Vector<Ref<VoxelMaterialProperties>> _voxel_type_properties; // Reverted to Godot Vector
 	
 
+
+private:
+	void process_structures_for_chunk(const Vector3 &chunk_coords);
+
+	
 
 
 protected:
@@ -77,7 +90,10 @@ public:
 
 	void add_edit_wrapper(Vector3 size, Vector3 world_pos, int material, int shape);
 
-	void add_vox_edit_wrapper(String path, Vector3 world_pos, int material);
+	void preload_vox_model(const String &p_key, const String &p_path);
+
+	void add_vox_edit_wrapper(String key, Vector3 world_pos, int material);
+
 
 	// Mesh generation and child addition
 	void create_and_add_mesh_instance_child(
@@ -150,5 +166,13 @@ public:
 
 	void set_biomes(const Array &p_biomes);
 	Array get_biomes() const;
+
+	void set_voxel_type_properties_array(const Array &p_array); // Changed to Godot Array
+	Array get_voxel_type_properties_array() const; // Changed to Godot Array
+
+	void set_global_structures(const Array &structures);
+	Array get_global_structures() const;
+	
+	float get_surface_height_at(float world_x, float world_z) const;
 
 };

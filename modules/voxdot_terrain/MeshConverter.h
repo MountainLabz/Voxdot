@@ -12,11 +12,15 @@
 #include <map> // For std::map to store material colors
 #include <vector>
 
+#include "core/templates/vector.h"   // For Godot's Vector<T>
+#include "voxel_material_properties.h" // For VoxelMaterialProperties class
+
 // Struct to hold mesh data in a format suitable for Godot's ArrayMesh
 struct GodotMeshData {
 	std::vector<float> vertices; // x, y, z floats
 	std::vector<float> normals; // nx, ny, nz floats
 	std::vector<float> uvs; // u, v floats
+	std::vector<float> uvs2; // For UV2 (metallicness, emissiveness)
 	std::vector<float> colors; // r, g, b, a floats (per-vertex color)
 	std::vector<uint32_t> indices; // For indexed drawing (triangles)
 };
@@ -37,7 +41,8 @@ public:
 	// @return A GodotMeshData struct populated with the converted mesh data.
 	void convertQuadsToGodotMesh(GodotMeshData &outGodotMeshData,
 			const MeshData &meshData,
-			float voxelScale) const;
+			float voxelScale,
+			const Vector<Ref<VoxelMaterialProperties>> &voxel_type_properties) const;
 
 	// Set a color for a specific material type using Godot::Vector4
 	void setMaterialColor(uint8_t materialType, const Vector4 &color);
@@ -48,10 +53,10 @@ public:
 private:
 	// Helper function to unpack a single uint64_t quad and add its vertices
 	// to the GodotMeshData.
-	void addQuadToGodotMesh(
-			GodotMeshData &godotMeshData,
-			uint64_t packedQuad,
-			float voxelScale) const;
+	void addQuadToGodotMesh(GodotMeshData &outGodotMeshData,
+			uint64_t packed_quad,
+			float voxelScale,
+			const Vector<Ref<VoxelMaterialProperties>> &voxel_type_properties) const;
 
 	// Map to store colors for different material types (uint8_t materialType -> Godot::Vector4 RGBA)
 	std::map<uint8_t, Vector4> materialColors;

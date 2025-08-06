@@ -19,6 +19,18 @@
 #include <fstream> // For file reading in SDFVoxEdit
 #include <limits> // For numeric_limits in SDFVoxEdit
 
+class SharedVoxData : public RefCounted {
+	GDCLASS(SharedVoxData, RefCounted);
+
+public:
+	std::vector<uint8_t> voxels; // The dense voxel grid
+	Vector3 dimensions; // Dimensions of the grid
+	Vector3 min_corner; // The local-space minimum corner of the model
+
+protected:
+	static void _bind_methods() {} // Required for GDCLASS
+};
+
 
 // Hash and equality for Godot's Vector3 to use as a HashMap key
 struct Vector3Hasher {
@@ -161,377 +173,109 @@ private:
 // SDF Vox Edit
 // ----------------------------------------------------------------------------
 
-
-
-
 class SDFVoxEdit : public ISDFEdit {
 	GDCLASS(SDFVoxEdit, ISDFEdit);
 
 private:
-	String _file_path;
-	Vector3 _offset; // Offset for the voxel model in world units
+	String _model_key; // MODIFIED: Replaced _file_path with _model_key
+	Vector3 _offset;
 	uint8_t _material;
-	float _scale = 1.0f; // NEW: Scale factor for the voxel model, default to 1.0
+	float _scale = 1.0f;
 
-	// Cached .vox scene data
-	mutable ogt_vox_scene *_vox_scene_cache = nullptr;
-	mutable PackedByteArray _file_buffer_cache; // Godot's PackedByteArray for file content
-
-	// Cached overall AABB of the voxel scene in its local space (relative to _offset)
-	mutable Vector3 _cached_scene_aabb_min_local;
-	mutable Vector3 _cached_scene_aabb_max_local;
-	mutable bool _are_bounds_cached = false;
-
-	// NEW: Members for pre-processed voxel data
-	mutable std::vector<uint8_t> _preprocessed_voxels;
-	mutable Vector3 _model_dimensions = Vector3(0, 0, 0); // Dimensions of the pre-processed voxel grid (x, y, z)
-	mutable Vector3 _model_min_corner = Vector3(0, 0, 0); // Local space minimum corner of the voxel model
-	mutable bool _is_preprocessed = false;
-
-	void _load_vox_file() const {
-		if (_vox_scene_cache && !_file_buffer_cache.is_empty()) {
-			return; // Already loaded and valid
-		}
-
-		// Clear existing data before attempting to load new file
-		_clear_vox_cache();
-
-		Ref<FileAccess> file = FileAccess::open(_file_path, FileAccess::READ);
-		if (file.is_null()) {
-			OS::get_singleton()->printerr("SDFVoxEdit: Failed to open .vox file: %s", _file_path);
-			return;
-		}
-
-		_file_buffer_cache.resize(file->get_length());
-		file->get_buffer(_file_buffer_cache.ptrw(), file->get_length());
-		file->close();
-
-		_vox_scene_cache = const_cast<ogt_vox_scene *>(ogt_vox_read_scene(_file_buffer_cache.ptr(), _file_buffer_cache.size()));
-		if (!_vox_scene_cache) {
-			OS::get_singleton()->printerr("SDFVoxEdit: Failed to read .vox scene from file: %s", _file_path);
-			_file_buffer_cache.clear(); // Clear buffer if loading failed
-		}
-	}
-
-	void _clear_vox_cache() const {
-		if (_vox_scene_cache) {
-			ogt_vox_destroy_scene(_vox_scene_cache);
-			_vox_scene_cache = nullptr;
-		}
-		_file_buffer_cache.clear();
-		_are_bounds_cached = false; // Invalidate bounds cache
-		_is_preprocessed = false; // Invalidate preprocessed cache
-		_preprocessed_voxels.clear();
-		_model_dimensions = Vector3(0, 0, 0);
-		_model_min_corner = Vector3(0, 0, 0);
-	}
-
-	void _calculate_and_cache_local_bounds() const { // New helper to compute/cache AABB
-		if (_are_bounds_cached && _vox_scene_cache) { // Only recalculate if path changed or not loaded
-			return;
-		}
-		_load_vox_file(); // Ensure scene is loaded
-
-		if (!_vox_scene_cache || _vox_scene_cache->num_models == 0) {
-			_cached_scene_aabb_min_local = Vector3(0, 0, 0);
-			_cached_scene_aabb_max_local = Vector3(0, 0, 0);
-			_are_bounds_cached = true;
-			return;
-		}
-
-		Vector3 min_bounds_local = Vector3(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
-		Vector3 max_bounds_local = Vector3(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
-
-		for (uint32_t i = 0; i < _vox_scene_cache->num_instances; ++i) {
-			const ogt_vox_instance *instance = &_vox_scene_cache->instances[i];
-			const ogt_vox_model *model = _vox_scene_cache->models[instance->model_index];
-
-			if (!model) {
-				continue;
-			}
-
-			// Model dimensions from ogt_vox (MagicaVoxel's internal X, Y, Z)
-			Vector3 model_size_magicavoxel = Vector3(model->size_x, model->size_y, model->size_z);
-
-			// Instance translation (corner of the model in MagicaVoxel's coordinate system)
-			Vector3 instance_translation_magicavoxel = Vector3(instance->transform.m30, instance->transform.m31, instance->transform.m32);
-
-			// Convert to Godot's coordinate system: X->X, Y_magica->Z_godot, Z_magica->Y_godot
-			Vector3 transformed_instance_translation_godot_space = Vector3(
-					instance_translation_magicavoxel.x,
-					instance_translation_magicavoxel.z, // MagicaVoxel Z is Godot Y (height)
-					instance_translation_magicavoxel.y // MagicaVoxel Y is Godot Z (depth)
-			);
-			Vector3 transformed_model_size_godot_space = Vector3(
-					model_size_magicavoxel.x,
-					model_size_magicavoxel.z, // MagicaVoxel Z is Godot Y (height)
-					model_size_magicavoxel.y // MagicaVoxel Y is Godot Z (depth)
-			);
-
-			// Apply the SDFVoxEdit's scale to the dimensions
-			Vector3 current_min_instance = transformed_instance_translation_godot_space * _scale;
-			Vector3 current_max_instance = (transformed_instance_translation_godot_space + transformed_model_size_godot_space) * _scale;
-
-			min_bounds_local.x = MIN(min_bounds_local.x, current_min_instance.x);
-			min_bounds_local.y = MIN(min_bounds_local.y, current_min_instance.y);
-			min_bounds_local.z = MIN(min_bounds_local.z, current_min_instance.z);
-
-			max_bounds_local.x = MAX(max_bounds_local.x, current_max_instance.x);
-			max_bounds_local.y = MAX(max_bounds_local.y, current_max_instance.y);
-			max_bounds_local.z = MAX(max_bounds_local.z, current_max_instance.z);
-		}
-		_cached_scene_aabb_min_local = min_bounds_local;
-		_cached_scene_aabb_max_local = max_bounds_local;
-		_are_bounds_cached = true;
-	}
-
-	float _calculate_sdf_to_box(const Vector3 &point, const Vector3 &box_min, const Vector3 &box_max) const {
-		// Based on https://www.iquilezles.org/www/articles/distfunctions/distfunctions.htm for AABB
-		Vector3 p_clamped = point.clamp(box_min, box_max);
-		float d_outside = point.distance_to(p_clamped);
-		float d_inside = 0.0f;
-
-		if (point == p_clamped) { // Point is inside the AABB
-			d_inside = MAX(MAX(box_min.x - point.x, point.x - box_max.x),
-					MAX(box_min.y - point.y, point.y - box_max.y));
-			d_inside = MAX(d_inside, MAX(box_min.z - point.z, point.z - box_max.z));
-		}
-		return d_outside - d_inside; // Positive outside, negative inside
-	}
-
-	void _preprocess_vox_data() const {
-		if (_is_preprocessed && _vox_scene_cache) {
-			return; // Already preprocessed
-		}
-
-		_load_vox_file(); // Ensure scene is loaded
-
-		if (!_vox_scene_cache || _vox_scene_cache->num_models == 0) {
-			_preprocessed_voxels.clear();
-			_model_dimensions = Vector3(0, 0, 0);
-			_model_min_corner = Vector3(0, 0, 0);
-			_is_preprocessed = true;
-			return;
-		}
-
-		// Calculate overall dimensions and min corner of the combined voxel data
-		// Initialize with extreme values to find true min/max
-		Vector3 min_voxel_coord = Vector3(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
-		Vector3 max_voxel_coord = Vector3(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
-
-		for (uint32_t i = 0; i < _vox_scene_cache->num_instances; ++i) {
-			const ogt_vox_instance *instance = &_vox_scene_cache->instances[i];
-			const ogt_vox_model *model = _vox_scene_cache->models[instance->model_index];
-			if (!model) {
-				continue;
-			}
-
-			// Convert MagicaVoxel instance translation to Godot (X->X, Y->Z, Z->Y)
-			Vector3 instance_translation_godot = Vector3(instance->transform.m30, instance->transform.m32, instance->transform.m31);
-			Vector3 model_size_godot = Vector3(model->size_x, model->size_z, model->size_y); // MagicaVoxel Z is Godot Y
-
-			min_voxel_coord.x = MIN(min_voxel_coord.x, instance_translation_godot.x);
-			min_voxel_coord.y = MIN(min_voxel_coord.y, instance_translation_godot.y);
-			min_voxel_coord.z = MIN(min_voxel_coord.z, instance_translation_godot.z);
-
-			max_voxel_coord.x = MAX(max_voxel_coord.x, instance_translation_godot.x + model_size_godot.x - 1); // -1 for max inclusive voxel coord
-			max_voxel_coord.y = MAX(max_voxel_coord.y, instance_translation_godot.y + model_size_godot.y - 1);
-			max_voxel_coord.z = MAX(max_voxel_coord.z, instance_translation_godot.z + model_size_godot.z - 1);
-		}
-
-		// Determine overall dimensions for the dense voxel grid
-		_model_min_corner = Vector3(Math::floor(min_voxel_coord.x), Math::floor(min_voxel_coord.y), Math::floor(min_voxel_coord.z));
-		_model_dimensions = Vector3(Math::ceil(max_voxel_coord.x) + 1, Math::ceil(max_voxel_coord.y) + 1, Math::ceil(max_voxel_coord.z) + 1) - _model_min_corner;
-
-		if (_model_dimensions.x < 1 && _vox_scene_cache->num_models > 0) {
-			_model_dimensions.x = 1;
-		}
-		if (_model_dimensions.y < 1 && _vox_scene_cache->num_models > 0) {
-			_model_dimensions.y = 1;
-		}
-		if (_model_dimensions.z < 1 && _vox_scene_cache->num_models > 0) {
-			_model_dimensions.z = 1;
-		}
-
-		size_t total_voxels = static_cast<size_t>(_model_dimensions.x) * static_cast<size_t>(_model_dimensions.y) * static_cast<size_t>(_model_dimensions.z);
-		_preprocessed_voxels.assign(total_voxels, 0); // Initialize with 0 (empty)
-
-		// Populate the preprocessed voxel array
-		for (uint32_t i = 0; i < _vox_scene_cache->num_instances; ++i) {
-			const ogt_vox_instance *instance = &_vox_scene_cache->instances[i];
-			const ogt_vox_model *model = _vox_scene_cache->models[instance->model_index];
-			if (!model) {
-				continue;
-			}
-
-			Vector3 instance_translation_godot = Vector3(instance->transform.m30, instance->transform.m32, instance->transform.m31);
-
-			for (uint32_t z_model = 0; z_model < model->size_z; ++z_model) {
-				for (uint32_t y_model = 0; y_model < model->size_y; ++y_model) {
-					for (uint32_t x_model = 0; x_model < model->size_x; ++x_model) {
-						uint8_t color_index = model->voxel_data[x_model + y_model * model->size_x + z_model * model->size_x * model->size_y];
-
-						if (color_index != 0) { // If voxel is not empty
-							Vector3 voxel_pos_model_space_magicavoxel = Vector3(x_model, y_model, z_model);
-
-							Vector3 voxel_pos_godot_relative_to_instance_origin = Vector3(
-									voxel_pos_model_space_magicavoxel.x,
-									voxel_pos_model_space_magicavoxel.z, // MagicaVoxel Z is Godot Y
-									voxel_pos_model_space_magicavoxel.y // MagicaVoxel Y is Godot Z
-							);
-
-							Vector3 world_voxel_pos = instance_translation_godot + voxel_pos_godot_relative_to_instance_origin;
-							Vector3 grid_pos = world_voxel_pos - _model_min_corner;
-
-							int gx = static_cast<int>(Math::round(grid_pos.x));
-							int gy = static_cast<int>(Math::round(grid_pos.y));
-							int gz = static_cast<int>(Math::round(grid_pos.z));
-
-							if (gx >= 0 && gx < _model_dimensions.x &&
-									gy >= 0 && gy < _model_dimensions.y &&
-									gz >= 0 && gz < _model_dimensions.z) {
-								size_t index = gx + static_cast<size_t>(gy) * static_cast<size_t>(_model_dimensions.x) + static_cast<size_t>(gz) * static_cast<size_t>(_model_dimensions.x) * static_cast<size_t>(_model_dimensions.y);
-								if (index < _preprocessed_voxels.size()) {
-									// In MagicaVoxel, palette index 0 is reserved for empty.
-									// The actual colors start at index 1. The ogt_vox color_index
-									// is 1-based for colors. We store it directly.
-									_preprocessed_voxels[index] = color_index;
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-		_is_preprocessed = true;
-	}
+	Ref<SharedVoxData> _shared_data;
 
 public:
-	SDFVoxEdit() :
-			_vox_scene_cache(nullptr),
-			_are_bounds_cached(false),
-			_is_preprocessed(false),
-			_material(1), // Default material to 1
-			_scale(1.0f) {
-	}
+	// Setters and Getters for properties
+	void set_model_key(const String &p_key) { _model_key = p_key; }
+	String get_model_key() const { return _model_key; }
+	void set_offset(const Vector3 &p_offset) { _offset = p_offset; }
+	Vector3 get_offset() const { return _offset; }
+	void set_material(uint8_t p_material) { _material = p_material; }
+	uint8_t get_material() const { return _material; }
+	void set_scale(float p_scale) { _scale = p_scale; }
+	float get_scale() const { return _scale; }
 
-	~SDFVoxEdit() {
-		_clear_vox_cache();
-	}
-
-	void set_file_path(const String &p_path) {
-		if (_file_path != p_path) {
-			_file_path = p_path;
-			_clear_vox_cache();
-		}
-	}
-	String get_file_path() const {
-		return _file_path;
-	}
-
-	void set_offset(const Vector3 &p_offset) {
-		_offset = p_offset;
-	}
-	Vector3 get_offset() const {
-		return _offset;
-	}
-
-	void set_material(uint8_t p_material) {
-		_material = p_material;
-	}
-	uint8_t get_material() const {
-		return _material;
-	}
-
-	void set_scale(float p_scale) {
-		if (_scale != p_scale) {
-			_scale = p_scale;
-			_are_bounds_cached = false;
-			_is_preprocessed = false;
-		}
-	}
-	float get_scale() const {
-		return _scale;
+	// NEW: Method to link this edit to the shared data from the cache
+	void set_shared_data(const Ref<SharedVoxData> &p_data) {
+		_shared_data = p_data;
 	}
 
 	virtual float getSignedDistance(const Vector3 &p_pos) const override {
-		if (!_is_preprocessed) {
-			_preprocess_vox_data();
+		if (_shared_data.is_null()) {
+			return 1.0f; // No data, so it's air
 		}
 
+		// Transform world position to the model's local grid coordinates
 		Vector3 local_pos = (p_pos - _offset) / _scale;
+		int vx = static_cast<int>(Math::floor(local_pos.x - _shared_data->min_corner.x));
+		int vy = static_cast<int>(Math::floor(local_pos.y - _shared_data->min_corner.y));
+		int vz = static_cast<int>(Math::floor(local_pos.z - _shared_data->min_corner.z));
 
-		int vx = static_cast<int>(Math::floor(local_pos.x - _model_min_corner.x));
-		int vy = static_cast<int>(Math::floor(local_pos.y - _model_min_corner.y));
-		int vz = static_cast<int>(Math::floor(local_pos.z - _model_min_corner.z));
-
-		int dim_x_int = static_cast<int>(_model_dimensions.x);
-		int dim_y_int = static_cast<int>(_model_dimensions.y);
-		int dim_z_int = static_cast<int>(_model_dimensions.z);
-
-		if (vx < 0 || vx >= dim_x_int || vy < 0 || vy >= dim_y_int || vz < 0 || vz >= dim_z_int) {
-			return 1.0f; // Outside the bounds of the voxel model, so it's air.
+		// Check bounds
+		int dim_x = static_cast<int>(_shared_data->dimensions.x);
+		int dim_y = static_cast<int>(_shared_data->dimensions.y);
+		int dim_z = static_cast<int>(_shared_data->dimensions.z);
+		if (vx < 0 || vx >= dim_x || vy < 0 || vy >= dim_y || vz < 0 || vz >= dim_z) {
+			return 1.0f; // Outside bounds
 		}
 
-		size_t index = static_cast<size_t>(vx + vy * dim_x_int + vz * dim_x_int * dim_y_int);
-
-		if (index < _preprocessed_voxels.size()) {
-			return _preprocessed_voxels[index] != 0 ? -1.0f : 1.0f;
+		// Lookup in the shared voxel data
+		size_t index = static_cast<size_t>(vx + vy * dim_x + vz * dim_x * dim_y);
+		if (index < _shared_data->voxels.size()) {
+			return _shared_data->voxels[index] != 0 ? -1.0f : 1.0f;
 		}
 		return 1.0f;
 	}
 
 	virtual uint8_t getMaterial(const Vector3 &p_pos) const override {
-		if (!_is_preprocessed) {
-			_preprocess_vox_data();
+		if (_shared_data.is_null()) {
+			return 0;
 		}
 
 		Vector3 local_pos = (p_pos - _offset) / _scale;
+		int vx = static_cast<int>(Math::floor(local_pos.x - _shared_data->min_corner.x));
+		int vy = static_cast<int>(Math::floor(local_pos.y - _shared_data->min_corner.y));
+		int vz = static_cast<int>(Math::floor(local_pos.z - _shared_data->min_corner.z));
 
-		int vx = static_cast<int>(Math::floor(local_pos.x - _model_min_corner.x));
-		int vy = static_cast<int>(Math::floor(local_pos.y - _model_min_corner.y));
-		int vz = static_cast<int>(Math::floor(local_pos.z - _model_min_corner.z));
+		int dim_x = static_cast<int>(_shared_data->dimensions.x);
+		int dim_y = static_cast<int>(_shared_data->dimensions.y);
+		int dim_z = static_cast<int>(_shared_data->dimensions.z);
 
-		int dim_x_int = static_cast<int>(_model_dimensions.x);
-		int dim_y_int = static_cast<int>(_model_dimensions.y);
-		int dim_z_int = static_cast<int>(_model_dimensions.z);
-
-		if (vx < 0 || vx >= dim_x_int || vy < 0 || vy >= dim_y_int || vz < 0 || vz >= dim_z_int) {
+		if (vx < 0 || vx >= dim_x || vy < 0 || vy >= dim_y || vz < 0 || vz >= dim_z) {
 			return 0; // Air
 		}
 
-		size_t index = static_cast<size_t>(vx + vy * dim_x_int + vz * dim_x_int * dim_y_int);
-
-		if (index < _preprocessed_voxels.size()) {
-			uint8_t mat_index = _preprocessed_voxels[index];
-			// If material is specified in the function call, it means we use single-material mode.
-			// Otherwise, we use the voxel's own material index.
-			if (_material != 0) {
+		size_t index = static_cast<size_t>(vx + vy * dim_x + vz * dim_x * dim_y);
+		if (index < _shared_data->voxels.size()) {
+			uint8_t mat_index = _shared_data->voxels[index];
+			if (_material != 0) { // Single-material override mode
 				return (mat_index != 0) ? _material : 0;
 			}
-			return mat_index;
+			return mat_index; // Voxel's own material
 		}
 		return 0; // Air
 	}
 
 	virtual std::pair<Vector3, Vector3> getApproximateWorldBounds() const override {
-		_calculate_and_cache_local_bounds();
-
-		return { _cached_scene_aabb_min_local + _offset, _cached_scene_aabb_max_local + _offset };
+		if (_shared_data.is_null()) {
+			return { _offset, _offset };
+		}
+		// The bounds are calculated from the shared data's dimensions, scaled, and offset
+		Vector3 min_local = _shared_data->min_corner * _scale;
+		Vector3 max_local = (_shared_data->min_corner + _shared_data->dimensions) * _scale;
+		return { min_local + _offset, max_local + _offset };
 	}
 
 	virtual Ref<ISDFEdit> clone() const override {
 		Ref<SDFVoxEdit> new_edit;
 		new_edit.instantiate();
-		new_edit->set_file_path(_file_path);
+		new_edit->set_model_key(_model_key); // MODIFIED
 		new_edit->set_offset(_offset);
 		new_edit->set_material(_material);
 		new_edit->set_scale(_scale);
+		new_edit->set_shared_data(_shared_data);
 		return new_edit;
 	}
-
-	//protected:
-	//	static void _bind_methods();
 };
 
 

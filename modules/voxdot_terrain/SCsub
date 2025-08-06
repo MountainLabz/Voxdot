@@ -10,6 +10,7 @@ voxel_sources = [
     "MeshConverter.cpp",
     "register_types.cpp",
     "mesher.cpp",
+    "voxel_material_properties.cpp",
 
     # Add all other source files in your module that need optimization
     # You can also use glob patterns, e.g., 
