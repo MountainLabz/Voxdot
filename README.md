@@ -1,6 +1,9 @@
 # Voxdot Engine
 The Godot Micro Voxel Engine
 
+<img width="1741" height="1018" alt="Screenshot 2025-08-05 162934" src="https://github.com/user-attachments/assets/e70dca4c-ffec-443f-a500-ad9cefca81af" />
+
+
 <img width="1890" height="948" alt="Screenshot 2025-07-21 104548" src="https://github.com/user-attachments/assets/67cd9df1-c040-4529-a8a8-74e7523d2e0b" />
 
 ![image](https://github.com/user-attachments/assets/1897373f-bb59-4681-9693-ca247bd0c3ba)
