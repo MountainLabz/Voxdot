@@ -1321,6 +1321,123 @@ void VoxdotTerrain::add_edit_wrapper(Vector3 size, Vector3 world_pos, int materi
 }
 
 
+//void VoxdotTerrain::preload_vox_model(const String &p_key, const String &p_path) {
+//	// 1. Prevent overwriting an existing key to avoid mistakes.
+//	if (_vox_model_cache.has(p_key)) {
+//		OS::get_singleton()->printerr("VoxdotTerrain: A model with key '", p_key, "' is already preloaded.");
+//		return;
+//	}
+//
+//	// 2. Perform the one-time processing of the .vox file.
+//	Ref<FileAccess> file = FileAccess::open(p_path, FileAccess::READ);
+//	if (file.is_null()) {
+//		OS::get_singleton()->printerr("preload_vox_model: Failed to open .vox file at path: %s", p_path);
+//		return;
+//	}
+//
+//	PackedByteArray buffer = file->get_buffer(file->get_length());
+//	const ogt_vox_scene *scene = ogt_vox_read_scene(buffer.ptr(), buffer.size());
+//
+//	if (!scene) {
+//		OS::get_singleton()->printerr("preload_vox_model: Failed to parse .vox scene from file: %s", p_path);
+//		return;
+//	}
+//
+//	Ref<SharedVoxData> shared_data;
+//	shared_data.instantiate();
+//
+//	// --- This is the same processing logic from the previous answer ---
+//	// It calculates the model's bounds and populates the dense voxel grid.
+//	// The result is stored in the `shared_data` object.
+//	// (Pasting the full logic here for completeness)
+//
+//	Vector3 min_voxel_coord = Vector3(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
+//	Vector3 max_voxel_coord = Vector3(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
+//
+//	for (uint32_t i = 0; i < scene->num_instances; ++i) {
+//		const ogt_vox_instance *instance = &scene->instances[i];
+//		const ogt_vox_model *model = scene->models[instance->model_index];
+//		if (!model) {
+//			continue;
+//		}
+//
+//		Vector3 instance_translation_godot = Vector3(instance->transform.m30, instance->transform.m32, instance->transform.m31);
+//		Vector3 model_size_godot = Vector3(model->size_x, model->size_z, model->size_y);
+//
+//		min_voxel_coord = min_voxel_coord.min(instance_translation_godot);
+//		max_voxel_coord = max_voxel_coord.max(instance_translation_godot + model_size_godot);
+//	}
+//
+//	shared_data->min_corner = min_voxel_coord;
+//	shared_data->dimensions = max_voxel_coord - min_voxel_coord;
+//
+//	size_t total_voxels = static_cast<size_t>(shared_data->dimensions.x) * static_cast<size_t>(shared_data->dimensions.y) * static_cast<size_t>(shared_data->dimensions.z);
+//	if (total_voxels == 0 && scene->num_models > 0) {
+//		// Handle case for single voxel models or other edge cases
+//		total_voxels = 1;
+//		if (shared_data->dimensions.x == 0) {
+//			shared_data->dimensions.x = 1;
+//		}
+//		if (shared_data->dimensions.y == 0) {
+//			shared_data->dimensions.y = 1;
+//		}
+//		if (shared_data->dimensions.z == 0) {
+//			shared_data->dimensions.z = 1;
+//		}
+//	}
+//
+//	shared_data->voxels.assign(total_voxels, 0);
+//	for (uint32_t i = 0; i < scene->num_instances; ++i) {
+//		const ogt_vox_instance *instance = &scene->instances[i];
+//		const ogt_vox_model *model = scene->models[instance->model_index];
+//		if (!model) {
+//			continue;
+//		}
+//
+//		Vector3 instance_translation_godot = Vector3(instance->transform.m30, instance->transform.m32, instance->transform.m31);
+//
+//		for (uint32_t z = 0; z < model->size_z; ++z) {
+//			for (uint32_t y = 0; y < model->size_y; ++y) {
+//				for (uint32_t x = 0; x < model->size_x; ++x) {
+//					uint32_t model_voxel_index = x + (y * model->size_x) + (z * model->size_x * model->size_y);
+//					uint8_t material_index = model->voxel_data[model_voxel_index];
+//
+//					if (material_index == 0) {
+//						continue; // Skip empty voxels
+//					}
+//
+//					// Voxel's position relative to its model's origin, converted to Godot coords
+//					Vector3 voxel_pos_in_model_godot = Vector3(x, z, y);
+//
+//					// Voxel's absolute world position (within the combined model)
+//					Vector3 voxel_pos_absolute = instance_translation_godot + voxel_pos_in_model_godot;
+//
+//					// Position relative to our dense grid's origin
+//					Vector3 grid_local_pos = voxel_pos_absolute - shared_data->min_corner;
+//
+//					int grid_x = static_cast<int>(grid_local_pos.x);
+//					int grid_y = static_cast<int>(grid_local_pos.y);
+//					int grid_z = static_cast<int>(grid_local_pos.z);
+//
+//					// Calculate 1D index for our flat std::vector
+//					size_t grid_index = grid_x + (grid_y * static_cast<int>(shared_data->dimensions.x)) + (grid_z * static_cast<int>(shared_data->dimensions.x) * static_cast<int>(shared_data->dimensions.y));
+//
+//					if (grid_index < total_voxels) {
+//						shared_data->voxels[grid_index] = material_index;
+//					}
+//				}
+//			}
+//		}
+//	}
+//
+//	// --- End of processing logic ---
+//
+//	ogt_vox_destroy_scene(scene);
+//
+//	// 3. Store the processed data in the cache with the user-defined key.
+//	_vox_model_cache[p_key] = shared_data;
+//	OS::get_singleton()->print("Preloaded model '", p_path, "' with key '", p_key, "'.");
+//}
 void VoxdotTerrain::preload_vox_model(const String &p_key, const String &p_path) {
 	// 1. Prevent overwriting an existing key to avoid mistakes.
 	if (_vox_model_cache.has(p_key)) {
@@ -1346,14 +1463,11 @@ void VoxdotTerrain::preload_vox_model(const String &p_key, const String &p_path)
 	Ref<SharedVoxData> shared_data;
 	shared_data.instantiate();
 
-	// --- This is the same processing logic from the previous answer ---
-	// It calculates the model's bounds and populates the dense voxel grid.
-	// The result is stored in the `shared_data` object.
-	// (Pasting the full logic here for completeness)
-
+	// Calculate the overall bounds of the combined scene
 	Vector3 min_voxel_coord = Vector3(std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max());
 	Vector3 max_voxel_coord = Vector3(std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest(), std::numeric_limits<float>::lowest());
 
+	// First pass: Determine the overall bounding box of all instances
 	for (uint32_t i = 0; i < scene->num_instances; ++i) {
 		const ogt_vox_instance *instance = &scene->instances[i];
 		const ogt_vox_model *model = scene->models[instance->model_index];
@@ -1361,32 +1475,90 @@ void VoxdotTerrain::preload_vox_model(const String &p_key, const String &p_path)
 			continue;
 		}
 
-		Vector3 instance_translation_godot = Vector3(instance->transform.m30, instance->transform.m32, instance->transform.m31);
-		Vector3 model_size_godot = Vector3(model->size_x, model->size_z, model->size_y);
+		// Construct Godot Transform3D from ogt_vox_transform
+		// ogt_vox_transform is row-major, Godot Transform3D is column-major for basis.
+		// ogt_vox_transform:
+		// m00 m01 m02 m03 (x_axis.x, y_axis.x, z_axis.x, translation.x)
+		// m10 m11 m12 m13 (x_axis.y, y_axis.y, z_axis.y, translation.y)
+		// m20 m21 m22 m23 (x_axis.z, y_axis.z, z_axis.z, translation.z)
+		// Godot Transform3D basis is (x_axis, y_axis, z_axis)
+		// Godot uses Y-up, Z-forward. MagicaVoxel uses Y-forward, Z-up.
+		// We need to swap Y and Z components and potentially negate for coordinate system differences.
+		// A common conversion for MagicaVoxel (X,Y,Z) to Godot (X,-Z,Y) or (X,Z,-Y)
+		// Let's assume (X,Y,Z) in MagicaVoxel maps to (X, Z, -Y) in Godot for now,
+		// and adjust if models appear rotated.
+		// The ogt_vox_transform matrix is 4x3, but effectively 3x3 rotation/scale + 3x1 translation.
+		// m00 m01 m02 | m03
+		// m10 m11 m12 | m13
+		// m20 m21 m22 | m23
 
-		min_voxel_coord = min_voxel_coord.min(instance_translation_godot);
-		max_voxel_coord = max_voxel_coord.max(instance_translation_godot + model_size_godot);
+		// Direct mapping of ogt_vox_transform to Godot's Transform3D,
+		// assuming ogt_vox_transform uses a standard right-handed coordinate system.
+		// We need to be careful with axis mapping (Y-up vs Z-up).
+		// For MagicaVoxel (X, Y, Z) where Y is depth and Z is height,
+		// to Godot (X, Y, Z) where Y is height and Z is depth:
+		// MagicaVoxel X -> Godot X
+		// MagicaVoxel Y -> Godot Z
+		// MagicaVoxel Z -> Godot Y
+
+		Transform3D instance_transform;
+		// Basis (rotation and scale)
+		// ogt_vox_transform is row-major. Godot basis vectors are columns.
+		// So, ogt_vox_transform.m00, m10, m20 form Godot's X axis.
+		// ogt_vox_transform.m01, m11, m21 form Godot's Y axis.
+		// ogt_vox_transform.m02, m12, m22 form Godot's Z axis.
+
+		// MagicaVoxel's X-axis maps to Godot's X-axis
+		instance_transform.basis.set_column(0, Vector3(instance->transform.m00, instance->transform.m10, instance->transform.m20));
+		// MagicaVoxel's Y-axis (depth) maps to Godot's Z-axis (depth)
+		instance_transform.basis.set_column(2, Vector3(instance->transform.m01, instance->transform.m11, instance->transform.m21));
+		// MagicaVoxel's Z-axis (height) maps to Godot's Y-axis (height)
+		instance_transform.basis.set_column(1, Vector3(instance->transform.m02, instance->transform.m12, instance->transform.m22));
+
+		// Origin (translation)
+		// MagicaVoxel's translation X -> Godot's translation X
+		// MagicaVoxel's translation Y -> Godot's translation Z
+		// MagicaVoxel's translation Z -> Godot's translation Y
+		instance_transform.origin = Vector3(instance->transform.m03, instance->transform.m23, instance->transform.m13);
+
+		// Calculate the transformed corners of the model to get its world-space AABB
+		Vector3 model_min_local = Vector3(0, 0, 0);
+		Vector3 model_max_local = Vector3(model->size_x, model->size_y, model->size_z); // ogt_vox reports Y as depth, Z as height
+
+		// Convert model_max_local to Godot's coordinate system for bounds calculation
+		Vector3 model_max_local_godot_coords = Vector3(model->size_x, model->size_z, model->size_y);
+
+		// Transform the local bounding box corners by the instance transform
+		// We need to transform all 8 corners and find the new min/max
+		AABB transformed_aabb;
+		transformed_aabb.position = instance_transform.xform(model_min_local);
+		transformed_aabb.size = instance_transform.xform(model_max_local_godot_coords) - transformed_aabb.position;
+		transformed_aabb = transformed_aabb.abs(); // Ensure positive size
+
+		// Update overall scene bounds
+		if (i == 0) { // Initialize with the first instance's bounds
+			min_voxel_coord = transformed_aabb.position;
+			max_voxel_coord = transformed_aabb.position + transformed_aabb.size;
+		} else {
+			min_voxel_coord = min_voxel_coord.min(transformed_aabb.position);
+			max_voxel_coord = max_voxel_coord.max(transformed_aabb.position + transformed_aabb.size);
+		}
 	}
 
 	shared_data->min_corner = min_voxel_coord;
-	shared_data->dimensions = max_voxel_coord - min_voxel_coord;
+	shared_data->dimensions = (max_voxel_coord - min_voxel_coord).ceil(); // Use ceil to ensure dimensions are large enough
 
 	size_t total_voxels = static_cast<size_t>(shared_data->dimensions.x) * static_cast<size_t>(shared_data->dimensions.y) * static_cast<size_t>(shared_data->dimensions.z);
-	if (total_voxels == 0 && scene->num_models > 0) {
-		// Handle case for single voxel models or other edge cases
+	if (total_voxels == 0) {
+		// Handle case where dimensions might be zero (e.g., empty scene or single point)
+		// Ensure a minimum size to avoid zero-sized vector
+		shared_data->dimensions = Vector3(1, 1, 1);
 		total_voxels = 1;
-		if (shared_data->dimensions.x == 0) {
-			shared_data->dimensions.x = 1;
-		}
-		if (shared_data->dimensions.y == 0) {
-			shared_data->dimensions.y = 1;
-		}
-		if (shared_data->dimensions.z == 0) {
-			shared_data->dimensions.z = 1;
-		}
 	}
 
 	shared_data->voxels.assign(total_voxels, 0);
+
+	// Second pass: Populate the dense voxel grid with transformed voxel data
 	for (uint32_t i = 0; i < scene->num_instances; ++i) {
 		const ogt_vox_instance *instance = &scene->instances[i];
 		const ogt_vox_model *model = scene->models[instance->model_index];
@@ -1394,11 +1566,16 @@ void VoxdotTerrain::preload_vox_model(const String &p_key, const String &p_path)
 			continue;
 		}
 
-		Vector3 instance_translation_godot = Vector3(instance->transform.m30, instance->transform.m32, instance->transform.m31);
+		// Reconstruct the instance's Godot Transform3D
+		Transform3D instance_transform;
+		instance_transform.basis.set_column(0, Vector3(instance->transform.m00, instance->transform.m10, instance->transform.m20));
+		instance_transform.basis.set_column(2, Vector3(instance->transform.m01, instance->transform.m11, instance->transform.m21));
+		instance_transform.basis.set_column(1, Vector3(instance->transform.m02, instance->transform.m12, instance->transform.m22));
+		instance_transform.origin = Vector3(instance->transform.m03, instance->transform.m23, instance->transform.m13);
 
-		for (uint32_t z = 0; z < model->size_z; ++z) {
-			for (uint32_t y = 0; y < model->size_y; ++y) {
-				for (uint32_t x = 0; x < model->size_x; ++x) {
+		for (uint32_t z = 0; z < model->size_z; ++z) { // ogt_vox Z is height
+			for (uint32_t y = 0; y < model->size_y; ++y) { // ogt_vox Y is depth
+				for (uint32_t x = 0; x < model->size_x; ++x) { // ogt_vox X is width
 					uint32_t model_voxel_index = x + (y * model->size_x) + (z * model->size_x * model->size_y);
 					uint8_t material_index = model->voxel_data[model_voxel_index];
 
@@ -1406,31 +1583,48 @@ void VoxdotTerrain::preload_vox_model(const String &p_key, const String &p_path)
 						continue; // Skip empty voxels
 					}
 
-					// Voxel's position relative to its model's origin, converted to Godot coords
-					Vector3 voxel_pos_in_model_godot = Vector3(x, z, y);
+					// Voxel's position relative to its model's origin in MagicaVoxel coords
+					Vector3 voxel_pos_in_model_magica = Vector3(x, y, z);
 
-					// Voxel's absolute world position (within the combined model)
-					Vector3 voxel_pos_absolute = instance_translation_godot + voxel_pos_in_model_godot;
+					// Transform voxel_pos_in_model_magica to Godot's coordinate system (X, Z, -Y)
+					// This is crucial for correct rotation/positioning if MagicaVoxel's axes
+					// don't directly map to Godot's.
+					// However, since we are applying the instance_transform which *should* handle
+					// the coordinate system conversion, we can likely just use the raw x,y,z
+					// and let the transform do the work.
+					// Let's use the Godot-friendly local voxel position (X, Y, Z) where Y is height.
+					Vector3 local_voxel_pos_godot = Vector3(x, z, y); // Map MagicaVoxel (X,Y,Z) to Godot (X,Z,Y)
+
+					// Apply the instance's full transform to get the voxel's absolute world position
+					Vector3 voxel_pos_absolute = instance_transform.xform(local_voxel_pos_godot);
 
 					// Position relative to our dense grid's origin
 					Vector3 grid_local_pos = voxel_pos_absolute - shared_data->min_corner;
 
-					int grid_x = static_cast<int>(grid_local_pos.x);
-					int grid_y = static_cast<int>(grid_local_pos.y);
-					int grid_z = static_cast<int>(grid_local_pos.z);
+					// Round to nearest integer for grid coordinates
+					int grid_x = static_cast<int>(Math::round(grid_local_pos.x));
+					int grid_y = static_cast<int>(Math::round(grid_local_pos.y));
+					int grid_z = static_cast<int>(Math::round(grid_local_pos.z));
 
-					// Calculate 1D index for our flat std::vector
-					size_t grid_index = grid_x + (grid_y * static_cast<int>(shared_data->dimensions.x)) + (grid_z * static_cast<int>(shared_data->dimensions.x) * static_cast<int>(shared_data->dimensions.y));
+					// Check bounds to prevent out-of-range access
+					if (grid_x >= 0 && grid_x < shared_data->dimensions.x &&
+							grid_y >= 0 && grid_y < shared_data->dimensions.y &&
+							grid_z >= 0 && grid_z < shared_data->dimensions.z) {
+						// Calculate 1D index for our flat std::vector
+						size_t grid_index = grid_x + (grid_y * static_cast<int>(shared_data->dimensions.x)) + (grid_z * static_cast<int>(shared_data->dimensions.x) * static_cast<int>(shared_data->dimensions.y));
 
-					if (grid_index < total_voxels) {
-						shared_data->voxels[grid_index] = material_index;
+						if (grid_index < total_voxels) {
+							shared_data->voxels[grid_index] = material_index;
+						} else {
+							OS::get_singleton()->printerr("VoxdotTerrain: Calculated grid_index out of bounds during voxel population.");
+						}
+					} else {
+						OS::get_singleton()->printerr("VoxdotTerrain: Voxel position out of calculated grid bounds: ", grid_local_pos);
 					}
 				}
 			}
 		}
 	}
-
-	// --- End of processing logic ---
 
 	ogt_vox_destroy_scene(scene);
 
