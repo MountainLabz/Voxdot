@@ -270,15 +270,16 @@ void VoxdotTerrain::add_chunk(const Vector3 &coords, bool empty) {
 	if (!chunk_map.has(coords)) {
 		ChunkMetadata new_chunk_metadata;
 		new_chunk_metadata.chunkCoords = coords;
-		new_chunk_metadata.is_dirty = true; // Mark as dirty for initial meshing
-		chunk_map.insert(coords, new_chunk_metadata);
+		new_chunk_metadata.is_dirty = true; // Mark as dirty for initial meshing		
 
 		if (empty == false) {
 			dirty_chunks.push_back(coords); // Add to dirty list
-			new_chunk_metadata.generate_terrain = false;
-		} else {
 			new_chunk_metadata.generate_terrain = true;
+		} else {
+			dirty_chunks.push_back(coords); // Add to dirty list
+			new_chunk_metadata.generate_terrain = false;
 		}
+		chunk_map.insert(coords, new_chunk_metadata);
 		
 		//OS::get_singleton()->print(vformat("Chunk added: %s\n", coords));
 	} else {
